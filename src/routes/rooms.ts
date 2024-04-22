@@ -2,9 +2,9 @@ import { Router } from "express";
 import { exec } from "child_process";
 import fs from "fs";
 import { hubInstance, serverInstance } from "../../constants";
-import { getConnection, makeQuery } from "../utils/database";
 import axios from "axios";
 import { v4 } from "uuid";
+import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
 
 
