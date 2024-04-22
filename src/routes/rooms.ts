@@ -258,6 +258,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
     }
 
     const serializedFile = JSON.stringify(req.body.file)
+    console.log(serializedFile)
 
     try {
         const [room] = await makeQuery(conn, "SELECT code FROM Rooms WHERE id = ?", [req.params.room_id])
