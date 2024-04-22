@@ -3,8 +3,12 @@ import { exec } from "child_process";
 import fs from "fs";
 import { hubInstance, serverInstance } from "../../constants";
 import axios from "axios";
+import { v4 } from "uuid";
+import { makeQuery, getConnection } from "../utils/database";
+import { PoolConnection } from "mysql2/promise";
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
+const dyteInstance = axios.create({ baseURL: "https://api.dyte.io/v2", headers: { Authorization: `Basic ${process.env.DYTE_AUTH}`} })
 export const roomRouter = Router()
 
 async function execAsync(command: string) {
@@ -44,8 +48,93 @@ roomRouter.get("/:room_id", async(req, res) => {
     
 })
 
+/* Create a new room, or join existing room */
 roomRouter.post("/", async (req, res) => {
+    const userEmail = req.body?.email
+    const username = req.body?.name
 
+    try {
+        if (!userEmail || !userEmail.includes("@") || !username) {
+            return res.status(400).send("Must provide email and name in body.")
+        }
+    } catch (error) {
+        return res.status(400).end("Must provide valid email.")
+    }
+
+    const conn = await getConnection()
+    try {
+        /* In either case, register the user first */
+        await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW()", [userEmail, username, username])
+
+        const [mostRecentRoom] = await makeQuery(conn, "SELECT * FROM Rooms ORDER BY creation_date DESC LIMIT 1")
+
+        if (mostRecentRoom.length > 0 && mostRecentRoom[0].is_full == 0) {
+            console.log("Found available room:", mostRecentRoom[0].id)
+
+            // Edge case: check if current participant is already in the room
+            const [currentParticipants] = await makeQuery(conn, "SELECT * FROM Participants WHERE room_id = ? AND user_email = ?", [mostRecentRoom[0].id, userEmail])
+            if (currentParticipants.length > 0) { // user must be already be waiting in a room, get them there
+                return res.json({
+                    room_id: mostRecentRoom[0].id,
+                    is_new_room: false,
+                    already_in_room: true
+                })
+            }
+            // Insert participant into dyte meeting
+            const insertionResponse = await dyteInstance.post(`/meetings/${mostRecentRoom[0].dyte_meeting_id}/participants`, {
+                preset_name: "group_call_participant",
+                custom_participant_id: userEmail,
+                name: username
+            }).then(r => r.data)
+
+            const [insertParticipantResult] = await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [mostRecentRoom[0].id, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+            console.log('insert participant', insertParticipantResult)
+
+            /* Update room to full */
+            await makeQuery(conn, "UPDATE Rooms SET is_full = 1 WHERE id = ?", [mostRecentRoom[0].id])
+
+            return res.json({
+                room_id: mostRecentRoom[0].id,
+                is_new_room: true,
+                already_in_room: false
+            })
+        }
+
+        const sessionId = v4().replace(/-/g, "");
+
+        // Create user
+        await execAsync(`docker exec env useradd ${sessionId}`)
+        await execAsync(`docker exec env mkdir /home/${sessionId}`)
+        await execAsync(`docker exec env chown ${sessionId}:${sessionId} /home/${sessionId}`)
+
+        await hubInstance.post(`/users/${sessionId}`)
+
+        // Create token
+        const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`, { expires_in: 86400 }).then(r => r.data)
+        console.log(`got token ${userToken} for user ${sessionId}`)
+
+        /* Note: does not automatically create a jupyter server */
+        // await hubInstance.post(`/users/${sessionId}/server`, undefined) // start new server
+
+        // const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
+
+        // Create Dyte meeting
+        const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
+        const meetingId = createMeetingResponse.data.id
+
+        await makeQuery(conn, "INSERT INTO Rooms (id, code, dyte_meeting_id, jupyter_server_token) VALUES (?, '', ?, ?)", [sessionId, meetingId, userToken])
+
+        res.json({
+            room_id: sessionId,
+            existing: false,
+            already_in_room: false
+        })
+    } catch (error) {
+        console.warn(error)
+        res.send(400)
+    } finally {
+        conn.release()
+    }
 })
 
 roomRouter.post("/:room_id/create-server", async (req, res) => {
@@ -53,19 +142,32 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
     if (!sessionId) {
         res.status(400).send("Session ID not provided")
     }
+    let conn: PoolConnection | undefined
+
     try {
-        await execAsync(`docker exec env useradd ${sessionId}`)
-        await execAsync(`docker exec env mkdir /home/${sessionId}`)
-        await execAsync(`docker exec env chown ${sessionId}:${sessionId} /home/${sessionId}`)
+        // Create server
+        const createServerResponse = await hubInstance.post(`/users/${sessionId}/server`, undefined)
+        .then(response => {
+            return response.status
+        })
+        .catch(err => {
+            return err.response.status
+        })
 
+        console.log(createServerResponse)
 
-        // Create user
-        await hubInstance.post(`/users/${sessionId}`)
+        if (createServerResponse === 400) {
+            return res.status(400).send("Server already started")
+        }
 
-        // Create token
-        const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`, { expires_in: 86400 }).then(r => r.data)
-        console.log(`got token ${userToken} for user ${sessionId}`)
-        await hubInstance.post(`/users/${sessionId}/server`, undefined)
+        conn = await getConnection()
+        const [roomInfo] = await makeQuery(conn, "SELECT jupyter_server_token FROM Rooms WHERE id = ?", [req.params.room_id])
+
+        if (roomInfo.length === 0) {
+            return res.status(404).send("Invalid room ID.")
+        }
+
+        const userToken = roomInfo[0].jupyter_server_token
 
         const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
 
