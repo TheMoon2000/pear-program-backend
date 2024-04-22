@@ -1,9 +1,9 @@
 import express from "express";
 import fs from "fs";
-import { exec } from "child_process"
 import {v4} from "uuid"
 import cors from 'cors';
 import axios from "axios";
+import 'dotenv/config';
 import { roomRouter } from "./routes/rooms";
 
 const app = express()
