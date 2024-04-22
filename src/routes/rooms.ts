@@ -253,7 +253,7 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
 
 roomRouter.post("/:room_id/code", async (req, res) => {
     const conn = await getConnection()
-    if (!req.body?.file) {
+    if (!req.body?.file == null) {
         return res.status(400).send("Must contain `file` in request body")
     }
 
