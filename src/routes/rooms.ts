@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { exec } from "child_process";
 import fs from "fs";
-import { hubInstance, serverInstance } from "../../constants";
+import { hubInstance, serverInstance } from "../constants";
 import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
@@ -32,7 +32,7 @@ roomRouter.get("/:room_id", async(req, res) => {
     try {
         // Get room information
         const [room] = await makeQuery(conn, 
-            "SELECT id, code, is_full, question_id FROM Rooms WHERE id = ?", 
+            "SELECT id, code, is_full, dyte_meeting_id, question_id FROM Rooms WHERE id = ?", 
             [req.params.room_id])
         if (room.length === 0) {
             return res.status(404).send("Did not find the room with the given id")
@@ -50,8 +50,8 @@ roomRouter.get("/:room_id", async(req, res) => {
 
         await hubInstance.delete(`/users/${req.params.room_id}/tokens/${id}`)
 
-        const [meeting] = await makeQuery(conn, 
-            "SELECT dyte_participant_id AS participant_id, dyte_token AS meeting_id FROM Participants WHERE room_id = ? AND user_email = ?", 
+        const [selfParticipant] = await makeQuery(conn, 
+            "SELECT dyte_participant_id AS participant_id, dyte_token FROM Participants WHERE room_id = ? AND user_email = ?", 
             [req.params.room_id, email])
 
         const [allParticipants] = await makeQuery(conn,
@@ -59,15 +59,22 @@ roomRouter.get("/:room_id", async(req, res) => {
             WHERE room_id = ?`,
             [req.params.room_id])
         
-        if (meeting.length === 0) {
-            meeting.push({ participant_id: null, meeting_id: null, user_token: null})
+        if (selfParticipant.length === 0) {
+            selfParticipant.push({ participant_id: null, meeting_id: null, user_token: null})
         } else {
-            meeting[0].user_token = userToken;
+            selfParticipant[0].user_token = userToken;
         }
-        meeting[0].all_participants = allParticipants;
         
-        res.status(200).json({room, test_cases: testcases.length !== 0 ? testcases : null
-            , server: terminalInfo.length !== 0 ? terminalInfo[0].name : null, meeting: meeting[0]})
+        res.status(200).json({
+            room,
+            test_cases: testcases.length !== 0 ? testcases : null,
+            server: terminalInfo.length !== 0 ? terminalInfo[0].name : null,
+            meeting: {
+                meeting_id: room[0].dyte_meeting_id,
+                all_participants: allParticipants,
+                user_token: selfParticipant[0].dyte_token
+            }
+        })
         } catch {
             res.sendStatus(500);
         } finally {
@@ -123,7 +130,7 @@ roomRouter.post("/", async (req, res) => {
 
             return res.json({
                 room_id: mostRecentRoom[0].id,
-                is_new_room: true,
+                is_new_room: false,
                 already_in_room: false
             })
         }
@@ -252,12 +259,11 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
 })
 
 roomRouter.post("/:room_id/code", async (req, res) => {
-    const conn = await getConnection()
-    if (!req.body?.file) {
+    if (typeof req.body?.file !== "string") {
         return res.status(400).send("Must contain `file` in request body")
     }
-
-    const serializedFile = JSON.stringify(req.body.file)
+    
+    const conn = await getConnection()
 
     try {
         const [room] = await makeQuery(conn, "SELECT code FROM Rooms WHERE id = ?", [req.params.room_id])
@@ -266,10 +272,10 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         }
 
         // Update on server
-        await execAsync(`docker exec env sh -c 'printf "%s" "$1" > /home/${req.params.room_id}/main.py' sh ${serializedFile}`)
+        await execAsync(`docker exec env sh -c 'printf "%s" "$1" > /home/${req.params.room_id}/main.py' sh ${req.body.file}`)
 
         // Update on DB
-        await makeQuery(conn, "UPDATE Rooms SET code = ? WHERE id = ?", [serializedFile, req.params.room_id])
+        await makeQuery(conn, "UPDATE Rooms SET code = ? WHERE id = ?", [req.body.file, req.params.room_id])
         await conn.commit()
         
         res.send("File saved")
