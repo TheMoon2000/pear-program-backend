@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { exec } from "child_process";
 import fs from "fs";
-import { hubInstance, serverInstance } from "../../constants";
+import { authHeader, hubInstance, serverInstance } from "../constants";
 import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
@@ -32,26 +32,28 @@ roomRouter.get("/:room_id", async(req, res) => {
     try {
         // Get room information
         const [room] = await makeQuery(conn, 
-            "SELECT id, code, is_full, question_id FROM Rooms WHERE id = ?", 
+            "SELECT Rooms.*, test_cases FROM Rooms LEFT JOIN TestCases ON TestCases.question_id = Rooms.question_id WHERE id = ?", 
             [req.params.room_id])
         if (room.length === 0) {
             return res.status(404).send("Did not find the room with the given id")
         }
+        
+        // Check if a server is opened
+        const status = await hubInstance.get(`/users/${req.params.room_id}`)
 
-        // Get test cases
-        const [testcases] = await makeQuery(conn, 
-            "SELECT title, stdin, stdout FROM TestCases WHERE question_id = ?", 
-            [room[0].question_id])
+        let terminalId = null
 
-        // Create temporary token
-        const { token: userToken, id } = await hubInstance.post(`/users/${req.params.room_id}/tokens`, { expires_in: 60 }).then(r => r.data)
-        // Get terminal information
-        const terminalInfo = await serverInstance.get(`/${req.params.room_id}/api/terminals`, { headers: { Authorization: `token ${userToken}` } }).then(r => r.data)
+        if (Object.keys(status.data.servers).length > 0) {
+            // A server is opened
 
-        await hubInstance.delete(`/users/${req.params.room_id}/tokens/${id}`)
+            // Get terminal information
+            const terminalInfo = await serverInstance.get(`/${req.params.room_id}/api/terminals`, { headers: authHeader }).then(r => r.data)
+            terminalId = terminalInfo[0]?.name ?? null
+        }
 
-        const [meeting] = await makeQuery(conn, 
-            "SELECT dyte_participant_id AS participant_id, dyte_token AS meeting_id FROM Participants WHERE room_id = ? AND user_email = ?", 
+
+        const [selfParticipant] = await makeQuery(conn, 
+            "SELECT dyte_participant_id AS participant_id, dyte_token FROM Participants WHERE room_id = ? AND user_email = ?", 
             [req.params.room_id, email])
 
         const [allParticipants] = await makeQuery(conn,
@@ -59,16 +61,24 @@ roomRouter.get("/:room_id", async(req, res) => {
             WHERE room_id = ?`,
             [req.params.room_id])
         
-        if (meeting.length === 0) {
-            meeting.push({ participant_id: null, meeting_id: null, user_token: null})
-        } else {
-            meeting[0].user_token = userToken;
+        if (selfParticipant.length === 0) {
+            selfParticipant.push({ participant_id: null, meeting_id: null, user_token: null})
         }
-        meeting[0].all_participants = allParticipants;
         
-        res.status(200).json({room, test_cases: testcases.length !== 0 ? testcases : null
-            , server: terminalInfo.length !== 0 ? terminalInfo[0].name : null, meeting: meeting[0]})
-        } catch {
+        res.status(200).json({
+            room: room[0],
+            server: {
+                terminal_id: terminalId
+            },
+            meeting: {
+                meeting_id: room[0].dyte_meeting_id,
+                all_participants: allParticipants,
+                participant_id: selfParticipant[0]?.participant_id,
+                user_token: selfParticipant[0]?.dyte_token
+            }
+        })
+        } catch (error) {
+            console.error(error)
             res.sendStatus(500);
         } finally {
             conn.release();
@@ -123,7 +133,7 @@ roomRouter.post("/", async (req, res) => {
 
             return res.json({
                 room_id: mostRecentRoom[0].id,
-                is_new_room: true,
+                is_new_room: false,
                 already_in_room: false
             })
         }
@@ -134,6 +144,7 @@ roomRouter.post("/", async (req, res) => {
         await execAsync(`docker exec env useradd ${sessionId}`)
         await execAsync(`docker exec env mkdir /home/${sessionId}`)
         await execAsync(`docker exec env chown ${sessionId}:${sessionId} /home/${sessionId}`)
+        await execAsync(`docker exec env chmod 700 /home/${sessionId}`)
 
         await hubInstance.post(`/users/${sessionId}`)
 
@@ -182,10 +193,16 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
             return err.response.status
         })
 
-        console.log(createServerResponse)
-
         if (createServerResponse === 400) {
-            return res.status(400).send("Server already started")
+            const terminalInfo = await serverInstance.get(`/${req.params.room_id}/api/terminals`, { headers: authHeader }).then(r => r.data)
+
+            if (terminalInfo.length > 0) {
+                await serverInstance.delete(`/${req.params.room_id}/api/terminals/${terminalInfo[0].name}`, { headers: authHeader })
+            }
+
+            const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
+            return res.json({ "terminal_id": newTerminal.name })
+            // return res.status(400).send("Server already started")
         }
 
         conn = await getConnection()
@@ -206,6 +223,7 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
     }
 })
 
+// Internal use only
 roomRouter.post("/:room_id/terminate-server", async (req, res) => {
     const sessionId: string = req.params.room_id
     if (!sessionId) {
@@ -214,7 +232,14 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
     try {
         await execAsync(`docker exec env deluser ${sessionId}`)
         await execAsync(`docker exec env rm -rf /home/${sessionId}`)
+        await serverInstance.delete(`/users/${sessionId}/server`, undefined)
         await hubInstance.delete(`/users/${sessionId}`)
+
+        const conn = await getConnection()
+        await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
+
+        conn.release()
+
         res.send("Server terminated successfully")
     } catch (error) {
         return res.status(400).send("Server not opened")
@@ -229,18 +254,13 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
         })
     
     if (userData) {
-        // Create temporary token
-        const { token: userToken, id } = await hubInstance.post(`/users/${req.params.room_id}/tokens`, { expires_in: 60 }).then(r => r.data)
-
-        const terminalInfo = await serverInstance.get(`/${req.params.room_id}/api/terminals`, { headers: { Authorization: `token ${userToken}` } }).then(r => r.data)
+        const terminalInfo = await serverInstance.get(`/${req.params.room_id}/api/terminals`, { headers: authHeader }).then(r => r.data)
 
         if (terminalInfo.length > 0) {
-            await serverInstance.delete(`/${req.params.room_id}/api/terminals/${terminalInfo[0].name}`, { headers: { Authorization: `token ${userToken}` } })
+            await serverInstance.delete(`/${req.params.room_id}/api/terminals/${terminalInfo[0].name}`, { headers: authHeader })
         }
 
-        const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: { Authorization: `token ${userToken}` } }).then(r => r.data)
-
-        await hubInstance.delete(`/users/${req.params.room_id}/tokens/${id}`)
+        const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
 
         res.json({
             user: userData,
@@ -252,24 +272,22 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
 })
 
 roomRouter.post("/:room_id/code", async (req, res) => {
-    const conn = await getConnection()
-    if (req.body?.file == null) {
+    if (typeof req.body?.file !== "string") {
         return res.status(400).send("Must contain `file` in request body")
     }
-
-    const serializedFile = JSON.stringify(req.body.file)
+    
+    const conn = await getConnection()
 
     try {
         const [room] = await makeQuery(conn, "SELECT code FROM Rooms WHERE id = ?", [req.params.room_id])
         if (room.length === 0) {
             return res.status(404).send("Did not find the room id")
         }
-
         // Update on server
-        await execAsync(`docker exec env sh -c 'printf "%s" "$1" > /home/${req.params.room_id}/main.py' sh ${serializedFile}`)
+        await execAsync(`docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`)
 
         // Update on DB
-        await makeQuery(conn, "UPDATE Rooms SET code = ? WHERE id = ?", [serializedFile, req.params.room_id])
+        await makeQuery(conn, "UPDATE Rooms SET code = ? WHERE id = ?", [req.body.file, req.params.room_id])
         await conn.commit()
         
         res.send("File saved")
@@ -282,6 +300,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
     }
 })
 
+/*
 roomRouter.post("/:room_id/run", async (req, res) => {
     const conn = await getConnection()
     try {
@@ -317,4 +336,24 @@ roomRouter.post("/:room_id/run", async (req, res) => {
         conn.release()
     }
    
+})
+*/
+
+roomRouter.post("/:room_id/test_results", async (req, res) => {
+
+    /* Check that test results exist in body */
+    if (!req.body?.test_results || !(req.body.test_results instanceof Array)) {
+        return res.status(400).send("Must provide `test_results` as array in body.")
+    }
+
+    const conn = await getConnection()
+    try {
+        await makeQuery(conn, "UPDATE Rooms SET test_results = ? WHERE id = ?", [JSON.stringify(req.body.test_results), req.params.room_id])
+        res.send()
+    } catch (error) {
+        console.log(error)
+        res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
+    }
 })
