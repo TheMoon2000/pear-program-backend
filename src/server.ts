@@ -7,7 +7,7 @@ import 'dotenv/config';
 import { roomRouter } from "./routes/rooms";
 
 const app = express()
-const port = 8012
+const port = 8011
 
 const corsOptions = {
     origin: "*"
