@@ -19,14 +19,14 @@ chatServer.on("connection", (ws, request) => {
     const roomId = query.room_id as string
     const email = query.email as string
     if (!roomId) {
-        return ws.close(400, "Must provide room_id and email in query parameter")
+        return ws.close(4000, "Must provide room_id and email in query parameter")
     }
 
     let history: ChatMessage[] | undefined = undefined
     
     sql("SELECT chat_history FROM Rooms WHERE id = ?", [roomId]).then((room => {
         if (room.length === 0) {
-            return ws.close(404, "Did not find room id")
+            return ws.close(4004, "Did not find room id")
         }
         history = room[0].chat_history
         if (!socketMap.has(roomId)) {
@@ -39,9 +39,9 @@ chatServer.on("connection", (ws, request) => {
 
     ws.on("message", (data: Buffer, isBinary) => {
         if (isBinary) {
-            return ws.close(400, "This socket not accept binary data!")
+            return ws.close(4000, "This socket not accept binary data!")
         } else if (!email) {
-            return ws.close(400, "Visitors cannot send messages!")
+            return ws.close(4000, "Visitors cannot send messages!")
         } else if (!history) {
             return ws.send(JSON.stringify({ event: "error", message: "Chat room not ready." }))
         }
@@ -50,7 +50,7 @@ chatServer.on("connection", (ws, request) => {
             /* Check */
             const action = rawMessage.action as string
             if (typeof action !== "string") {
-                ws.close(400, "Must provide 'action' in body")
+                ws.close(4000, "Must provide 'action' in body")
             }
             
             if (action === "start_typing" || action === "stop_typing") {
@@ -58,9 +58,9 @@ chatServer.on("connection", (ws, request) => {
             } else if (action === "send_text") {
                 const content = rawMessage.content as string
                 if (typeof content !== "string") {
-                    ws.close(400, "`send_text` action requires a `content` string field.")
+                    ws.close(4000, "`send_text` action requires a `content` string field.")
                 } else if (content.length > 4096) {
-                    ws.close(400, "Content length exceeded")
+                    ws.close(4000, "Content length exceeded")
                 }
 
                 const message = {
@@ -75,7 +75,7 @@ chatServer.on("connection", (ws, request) => {
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
                     socketMap.get(roomId)?.forEach(roomWs => {
-                        roomWs.close(400, "Chat room is not writable.")
+                        roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
             } else if (action === "make_choice") {
@@ -84,11 +84,11 @@ chatServer.on("connection", (ws, request) => {
                 const choiceIndex = rawMessage.choice_index as number
 
                 if ([messageId, contentIndex, choiceIndex].some(i => !Number.isInteger(i))) {
-                    return ws.close(400, "In order to make choice, must provide integer `message_id`, `content_index`, and `choice_index`.")
+                    return ws.close(4000, "In order to make choice, must provide integer `message_id`, `content_index`, and `choice_index`.")
                 }
                 console.log(history[messageId])
                 if (history[messageId]?.content[contentIndex]?.value[choiceIndex] === undefined) {
-                    return ws.close(400, "A combination of `message_id`, `content_index`, and `choice_index` is invalid.")
+                    return ws.close(4000, "A combination of `message_id`, `content_index`, and `choice_index` is invalid.")
                 }
                 history[messageId].content[contentIndex].choice_index = choiceIndex
                 socketMap.get(roomId)?.forEach(roomWs => {
@@ -102,16 +102,16 @@ chatServer.on("connection", (ws, request) => {
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
                     socketMap.get(roomId)?.forEach(roomWs => {
-                        roomWs.close(400, "Chat room is not writable.")
+                        roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
             } else {
-                return ws.close(400, `Action '${action}' is unrecognized.`)
+                return ws.close(4000, `Action '${action}' is unrecognized.`)
             }
             
         } catch (error) {
             console.log(error)
-            return ws.send("The message format is invalid.")
+            return ws.close(4000, "The message format is invalid.")
         }
     })
 

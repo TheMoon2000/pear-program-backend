@@ -26,6 +26,10 @@ async function execAsync(command: string) {
     })
 }
 
+roomRouter.get("/heartbeat", async (req, res) => {
+    res.send(Array.from(roomTimeouts.keys()))
+})
+
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
     const conn = await getConnection();
@@ -431,18 +435,27 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
     const conn = await getConnection();
     const sessionId = req.params.room_id
     try {
-        const [room] = await makeQuery(conn,`SELECT * FROM Rooms WHERE id = ?`,[sessionId])
-        if ( room.length === 0){
-            return res.status(404).send("Did not find the room with the given id")
+        const timeout = roomTimeouts.get(sessionId)
+        if (timeout) {
+            clearTimeout(roomTimeouts.get(sessionId))
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+                await terminateServer(sessionId)
+                roomTimeouts.delete(sessionId)
+                console.log("Deleted room", sessionId)
+            }, 1000 * 60 * 60)) // 1 hour
+        } else {
+            const [room] = await makeQuery(conn,`SELECT * FROM Rooms WHERE id = ?`,[sessionId])
+            if (room.length === 0) {
+                return res.status(404).send("Did not find the room with the given id")
+            }
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+                await terminateServer(sessionId)
+                roomTimeouts.delete(sessionId)
+                console.log("Deleted room", sessionId)
+            }, 1000 * 60 * 60))
         }
-
-        clearTimeout(roomTimeouts.get(sessionId))
-        roomTimeouts.set(sessionId, setTimeout(async () => {
-            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-            await terminateServer(sessionId)
-            roomTimeouts.delete(sessionId)
-            console.log("Deleted room", sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
 
         console.log("Heartbeat received for room", sessionId)
         res.status(200).send("Heartbeat received")
