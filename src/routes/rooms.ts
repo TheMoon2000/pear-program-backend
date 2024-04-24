@@ -186,13 +186,13 @@ roomRouter.post("/", async (req, res) => {
         await makeQuery(conn, "INSERT INTO Rooms (id, code, dyte_meeting_id, jupyter_server_token) VALUES (?, '', ?, ?)", [sessionId, meetingId, userToken])
 
         // Insert participant into dyte meeting
-        // const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
-        //     preset_name: "group_call_participant",
-        //     custom_participant_id: userEmail,
-        //     name: username
-        // }).then(r => r.data)
+        const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
+            preset_name: "group_call_participant",
+            custom_participant_id: userEmail,
+            name: username
+        }).then(r => r.data)
 
-        // await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+        await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
 
         // Set timeout to delete room upon creation of the room
         roomTimeouts.set(sessionId, setTimeout(async () => {
