@@ -10,6 +10,7 @@ import { PoolConnection } from "mysql2/promise";
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
 const dyteInstance = axios.create({ baseURL: "https://api.dyte.io/v2", headers: { Authorization: `Basic ${process.env.DYTE_AUTH}`} })
+const roomTimeouts = new Map<string, NodeJS.Timeout>();
 
 export const roomRouter = Router()
 
@@ -117,7 +118,7 @@ roomRouter.post("/", async (req, res) => {
             return res.status(400).send("Must provide email and name in body.")
         }
     } catch (error) {
-        return res.status(400).end("Must provide valid email.")
+        return res.status(400).send("Must provide valid email.")
     }
 
     const conn = await getConnection()
@@ -133,6 +134,7 @@ roomRouter.post("/", async (req, res) => {
             // Edge case: check if current participant is already in the room
             const [currentParticipants] = await makeQuery(conn, "SELECT * FROM Participants WHERE room_id = ? AND user_email = ?", [mostRecentRoom[0].id, userEmail])
             if (currentParticipants.length > 0) { // user must be already be waiting in a room, get them there
+
                 return res.json({
                     room_id: mostRecentRoom[0].id,
                     is_new_room: false,
@@ -181,7 +183,7 @@ roomRouter.post("/", async (req, res) => {
         const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
         const meetingId = createMeetingResponse.data.id
 
-        await makeQuery(conn, "INSERT INTO Rooms (id, code, dyte_meeting_id, jupyter_server_token) VALUES (?, '', ?, ?)", [sessionId, meetingId, userToken])
+        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token) VALUES (?, '', '', ?, ?)", [sessionId, meetingId, userToken])
 
         // Insert participant into dyte meeting
         const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
@@ -192,6 +194,14 @@ roomRouter.post("/", async (req, res) => {
 
         await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
 
+        // Set timeout to delete room upon creation of the room
+        roomTimeouts.set(sessionId, setTimeout(async () => {
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+            await terminateServer(sessionId)
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
+        }, 1000 * 60 * 60)) // 1 hour
+
         res.json({
             room_id: sessionId,
             existing: false,
@@ -199,7 +209,7 @@ roomRouter.post("/", async (req, res) => {
         })
     } catch (error) {
         console.warn(error)
-        res.send(400)
+        res.sendStatus(400)
     } finally {
         conn.release()
     }
@@ -259,10 +269,7 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         res.status(400).send("Session ID not provided")
     }
     try {
-        await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
-        await execAsync(`docker exec env rm -rf /home/${sessionId}`)
-        await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
-        await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
+        await terminateServer(sessionId);
 
         const conn = await getConnection()
         await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
@@ -275,6 +282,13 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         return res.status(400).send("Server not opened")
     }
 })
+
+const terminateServer = async (sessionId: string) => {
+    await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
+    await execAsync(`docker exec env rm -rf /home/${sessionId}`)
+    await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
+    await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
+};
 
 roomRouter.post("/:room_id/restart-server", async (req, res) => {
     const userData = await hubInstance.get(`/users/${req.params.room_id}`)
@@ -410,5 +424,29 @@ roomRouter.patch("/:room_id", async (req, res) => {
         res.status(500).send("Internal server error")
     } finally {
         conn.release()
+    }
+})
+
+roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
+    const conn = await getConnection();
+    const sessionId = req.params.room_id
+    try {
+        const [room] = await makeQuery(conn,`SELECT * FROM Rooms WHERE id = ?`,[sessionId])
+        if ( room.length === 0){
+            return res.status(404).send("Did not find the room with the given id")
+        }
+
+        clearTimeout(roomTimeouts.get(sessionId))
+        roomTimeouts.set(sessionId, setTimeout(async () => {
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+            await terminateServer(sessionId)
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
+        }, 1000 * 60 * 60)) // 1 hour
+
+        console.log("Heartbeat received for room", sessionId)
+        res.status(200).send("Heartbeat received")
+    } catch{
+        res.status(500).send("Internal server error")
     }
 })
