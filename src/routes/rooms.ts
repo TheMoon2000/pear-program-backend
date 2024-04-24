@@ -118,7 +118,7 @@ roomRouter.post("/", async (req, res) => {
             return res.status(400).send("Must provide email and name in body.")
         }
     } catch (error) {
-        return res.status(400).end("Must provide valid email.")
+        return res.status(400).send("Must provide valid email.")
     }
 
     const conn = await getConnection()
@@ -208,7 +208,7 @@ roomRouter.post("/", async (req, res) => {
         })
     } catch (error) {
         console.warn(error)
-        res.send(400)
+        res.sendStatus(400)
     } finally {
         conn.release()
     }
