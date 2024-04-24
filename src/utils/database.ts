@@ -19,7 +19,7 @@ let pool = createPool(loginConfig);
  * 
  * @returns {Promise<PoolConnection>}
  */
-export async function getConnection(): Promise<PoolConnection> {
+export async function getConnection(timeout_ms = 20000): Promise<PoolConnection> {
     let isReleased = false
     const connection = await pool.getConnection();
     // console.log("created connection", connection.threadId, "at", new Date())
@@ -30,13 +30,15 @@ export async function getConnection(): Promise<PoolConnection> {
         isReleased = true
         // console.log("Released connection", connection.threadId)
     }
-    setTimeout(() => {
-        if (!isReleased) {
-            connection.release = originalReleaseFunc
-            connection.release()
-            console.warn(`WARNING: force-released connection ${connection.threadId} after 20s`)
-        }
-    }, 20000)
+    if (Number.isFinite(timeout_ms)) {
+        setTimeout(() => {
+            if (!isReleased) {
+                connection.release = originalReleaseFunc
+                connection.release()
+                console.warn(`WARNING: force-released connection ${connection.threadId} after 20s`)
+            }
+        }, timeout_ms)
+    }
     return connection
 }
 
