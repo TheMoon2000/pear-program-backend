@@ -198,7 +198,8 @@ roomRouter.post("/", async (req, res) => {
         roomTimeouts.set(sessionId, setTimeout(async () => {
             const [deleteRoom] = await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
             // await serverInstance.delete(`/users/${sessionId}/server`, undefined)
-            Map.prototype.delete(sessionId)
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
         }, 1000 * 30)) // 1 hour
 
         res.json({
@@ -435,8 +436,9 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
         roomTimeouts.set(sessionId, setTimeout(async () => {
             const [deleteRoom] = await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
             await serverInstance.delete(`/users/${sessionId}/server`, undefined)
-            Map.prototype.delete(sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
+        }, 1000 * 30)) // 1 hour
 
         console.log("Heartbeat received for room", sessionId)
     } catch{
