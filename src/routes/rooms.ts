@@ -196,11 +196,11 @@ roomRouter.post("/", async (req, res) => {
 
         // Set timeout to delete room upon creation of the room
         roomTimeouts.set(sessionId, setTimeout(async () => {
-            const [deleteRoom] = await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-            // await serverInstance.delete(`/users/${sessionId}/server`, undefined)
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+            await terminateServer(sessionId)
             roomTimeouts.delete(sessionId)
             console.log("Deleted room", sessionId)
-        }, 1000 * 30)) // 1 hour
+        }, 1000 * 60 * 60)) // 1 hour
 
         res.json({
             room_id: sessionId,
@@ -269,10 +269,7 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         res.status(400).send("Session ID not provided")
     }
     try {
-        await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
-        await execAsync(`docker exec env rm -rf /home/${sessionId}`)
-        await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
-        await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
+        await terminateServer(sessionId);
 
         const conn = await getConnection()
         await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
@@ -285,6 +282,13 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         return res.status(400).send("Server not opened")
     }
 })
+
+const terminateServer = async (sessionId: string) => {
+    await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
+    await execAsync(`docker exec env rm -rf /home/${sessionId}`)
+    await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
+    await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
+};
 
 roomRouter.post("/:room_id/restart-server", async (req, res) => {
     const userData = await hubInstance.get(`/users/${req.params.room_id}`)
@@ -434,13 +438,14 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
 
         clearTimeout(roomTimeouts.get(sessionId))
         roomTimeouts.set(sessionId, setTimeout(async () => {
-            const [deleteRoom] = await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-            await serverInstance.delete(`/users/${sessionId}/server`, undefined)
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
+            await terminateServer(sessionId)
             roomTimeouts.delete(sessionId)
             console.log("Deleted room", sessionId)
-        }, 1000 * 30)) // 1 hour
+        }, 1000 * 60 * 60)) // 1 hour
 
         console.log("Heartbeat received for room", sessionId)
+        res.status(200).send("Heartbeat received")
     } catch{
         res.status(500).send("Internal server error")
     }
