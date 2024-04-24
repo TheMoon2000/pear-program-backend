@@ -7,7 +7,7 @@ import 'dotenv/config';
 import { roomRouter } from "./routes/rooms";
 
 const app = express()
-const port = 8011
+const port = 8010
 
 const corsOptions = {
     origin: "*"
@@ -19,7 +19,6 @@ app.use("/rooms", roomRouter);
 app.get("/", async (req, res) => {
     res.send("success")
 })
-
 
 
 app.listen(port, () => {
