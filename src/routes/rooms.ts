@@ -183,7 +183,7 @@ roomRouter.post("/", async (req, res) => {
         const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
         const meetingId = createMeetingResponse.data.id
 
-        await makeQuery(conn, "INSERT INTO Rooms (id, code, dyte_meeting_id, jupyter_server_token) VALUES (?, '', ?, ?)", [sessionId, meetingId, userToken])
+        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token) VALUES (?, '', '', ?, ?)", [sessionId, meetingId, userToken])
 
         // Insert participant into dyte meeting
         const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
