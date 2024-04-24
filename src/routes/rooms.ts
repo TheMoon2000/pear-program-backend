@@ -38,9 +38,22 @@ roomRouter.get("/:room_id", async(req, res) => {
         if (room.length === 0) {
             return res.status(404).send("Did not find the room with the given id")
         }
+
+        const rustpadHistory = await axios.get(`http://rustpad.io/api/text/${req.params.room_id}`)
+        const authorHistory = await axios.get(`http://rustpad.io/api/text/${req.params.room_id}-authors`)
+        if (rustpadHistory.data) {
+            room[0].rustpad_code = rustpadHistory.data
+        }
+        if (authorHistory.data) {
+            room[0].rustpad_author_map = authorHistory.data
+        }
         
         // Check if a server is opened
-        const status = await hubInstance.get(`/users/${req.params.room_id}`)
+        const status = await hubInstance.get(`/users/${req.params.room_id}`).catch(err => null)
+
+        if (status === null) {
+            return res.status(404).send("Room not found.")
+        }
 
         let terminalId = null
 
@@ -57,20 +70,28 @@ roomRouter.get("/:room_id", async(req, res) => {
             "SELECT dyte_participant_id AS participant_id, dyte_token FROM Participants WHERE room_id = ? AND user_email = ?", 
             [req.params.room_id, email])
 
+        if (selfParticipant.length === 0) {
+            selfParticipant.push({ participant_id: null, user_token: null})
+        }
+
         const [allParticipants] = await makeQuery(conn,
             `SELECT p.dyte_participant_id AS participant_id, u.name FROM Participants p LEFT JOIN Users u ON p.user_email = u.email
-            WHERE room_id = ?`,
+            WHERE room_id = ? ORDER BY joined_date`,
             [req.params.room_id])
         
-        if (selfParticipant.length === 0) {
-            selfParticipant.push({ participant_id: null, meeting_id: null, user_token: null})
-        }
+        allParticipants.forEach((item: any, i: number) => {
+            item.index = i
+            if (selfParticipant[0]?.participant_id === item.participant_id) {
+                selfParticipant[0].index = i
+            }
+        })        
         
         res.status(200).json({
             room: room[0],
             server: {
                 terminal_id: terminalId
             },
+            author_id: selfParticipant[0].index,
             meeting: {
                 meeting_id: room[0].dyte_meeting_id,
                 all_participants: allParticipants,
@@ -128,7 +149,6 @@ roomRouter.post("/", async (req, res) => {
             }).then(r => r.data)
 
             const [insertParticipantResult] = await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [mostRecentRoom[0].id, userEmail, insertionResponse.data.token, insertionResponse.data.id])
-            console.log('insert participant', insertParticipantResult)
 
             /* Update room to full */
             await makeQuery(conn, "UPDATE Rooms SET is_full = 1 WHERE id = ?", [mostRecentRoom[0].id])
@@ -151,7 +171,7 @@ roomRouter.post("/", async (req, res) => {
         await hubInstance.post(`/users/${sessionId}`)
 
         // Create token
-        const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`, { expires_in: 86400 }).then(r => r.data)
+        const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`).then(r => r.data)
         console.log(`got token ${userToken} for user ${sessionId}`)
 
         /* Note: does not automatically create a jupyter server */
@@ -164,6 +184,15 @@ roomRouter.post("/", async (req, res) => {
         const meetingId = createMeetingResponse.data.id
 
         await makeQuery(conn, "INSERT INTO Rooms (id, code, dyte_meeting_id, jupyter_server_token) VALUES (?, '', ?, ?)", [sessionId, meetingId, userToken])
+
+        // Insert participant into dyte meeting
+        const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
+            preset_name: "group_call_participant",
+            custom_participant_id: userEmail,
+            name: username
+        }).then(r => r.data)
+
+        await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
 
         // Set timeout to delete room upon creation of the room
         roomTimeouts.set(sessionId, setTimeout(async () => {
@@ -239,10 +268,10 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         res.status(400).send("Session ID not provided")
     }
     try {
-        await execAsync(`docker exec env deluser ${sessionId}`)
+        await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
         await execAsync(`docker exec env rm -rf /home/${sessionId}`)
-        await serverInstance.delete(`/users/${sessionId}/server`, undefined)
-        await hubInstance.delete(`/users/${sessionId}`)
+        await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
+        await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
 
         const conn = await getConnection()
         await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
@@ -251,6 +280,7 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
 
         res.send("Server terminated successfully")
     } catch (error) {
+        console.log("failed to terminate server")
         return res.status(400).send("Server not opened")
     }
 })
@@ -281,14 +311,14 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
 })
 
 roomRouter.post("/:room_id/code", async (req, res) => {
-    if (typeof req.body?.file !== "string") {
+    if (typeof req.body?.file !== "string" || typeof req.body?.author_map !== "string") {
         return res.status(400).send("Must contain `file` in request body")
     }
-    
+
     const conn = await getConnection()
 
     try {
-        const [room] = await makeQuery(conn, "SELECT code FROM Rooms WHERE id = ?", [req.params.room_id])
+        const [room] = await makeQuery(conn, "SELECT id FROM Rooms WHERE id = ?", [req.params.room_id])
         if (room.length === 0) {
             return res.status(404).send("Did not find the room id")
         }
@@ -296,8 +326,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         await execAsync(`docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`)
 
         // Update on DB
-        await makeQuery(conn, "UPDATE Rooms SET code = ? WHERE id = ?", [req.body.file, req.params.room_id])
-
+        await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ? WHERE id = ?", [req.body.file, req.body.author_map, req.params.room_id])
         await conn.commit()
         
         res.send("File saved")
@@ -360,6 +389,31 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
     try {
         await makeQuery(conn, "UPDATE Rooms SET test_results = ? WHERE id = ?", [JSON.stringify(req.body.test_results), req.params.room_id])
         res.send()
+    } catch (error) {
+        console.log(error)
+        res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
+    }
+})
+
+// Update question id of room
+roomRouter.patch("/:room_id", async (req, res) => {
+
+    if (typeof req.body?.question_id !== "string") {
+        return res.status(400).send("Must provide `question_id` as string in body.")
+    }
+
+    const conn = await getConnection()
+    try {
+        const testCases = await makeQuery(conn, "SELECT * FROM TestCases WHERE question_id = ?", [req.body.question_id])
+        if (testCases.length === 0) {
+            return res.status(404).send("Question id not found.")
+        }
+
+        await makeQuery(conn, "UPDATE Rooms SET question_id = ? WHERE id = ?", [req.body.question_id, req.params.room_id])
+
+        res.send(testCases[0])
     } catch (error) {
         console.log(error)
         res.status(500).send("Internal server error")
