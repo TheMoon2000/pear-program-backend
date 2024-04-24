@@ -200,7 +200,7 @@ roomRouter.post("/", async (req, res) => {
             await terminateServer(sessionId)
             roomTimeouts.delete(sessionId)
             console.log("Deleted room", sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
+        }, 1000 * 20)) // 1 hour
 
         res.json({
             room_id: sessionId,
