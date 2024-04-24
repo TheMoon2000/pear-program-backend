@@ -192,7 +192,7 @@ roomRouter.post("/", async (req, res) => {
         //     name: username
         // }).then(r => r.data)
 
-        await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+        // await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
 
         // Set timeout to delete room upon creation of the room
         roomTimeouts.set(sessionId, setTimeout(async () => {
