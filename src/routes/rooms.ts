@@ -448,16 +448,28 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
         const timeout = roomTimeouts.get(sessionId)
         if (timeout) {
             clearTimeout(timeout)
-        }
-        roomTimeouts.set(sessionId, setTimeout(async () => {
-            await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
-            roomTimeouts.delete(sessionId)
-            console.log("Deleted room", sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+                roomTimeouts.delete(sessionId)
+                console.log("Deallocated server for room", sessionId)
+            }, 1000 * 60 * 60)) // 1 hour
+        } else {
+            const [roomInfo] = await makeQuery(conn, "SELECT id FROM Rooms WHERE id = ?", [sessionId])
+            if (roomInfo.length === 0) {
+                return res.status(404).send("Room id not found.")
+            }
 
-        console.log("Heartbeat received for room", sessionId)
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+                roomTimeouts.delete(sessionId)
+                console.log("Deallocated server for room", sessionId)
+            }, 1000 * 60 * 60))
+        }
+
         res.status(200).send("Heartbeat received")
-    } catch{
+    } catch {
         res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
     }
 })
