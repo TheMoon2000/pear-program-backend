@@ -28,7 +28,7 @@ chatServer.on("connection", (ws, request) => {
         if (room.length === 0) {
             return ws.close(4004, "Did not find room id")
         }
-        history = room[0].chat_history
+        history = room[0].chat_history ?? []
         if (!socketMap.has(roomId)) {
             socketMap.set(roomId, new Set())
         }
