@@ -4,6 +4,7 @@ import {v4} from "uuid"
 import cors from 'cors';
 import axios from "axios";
 import 'dotenv/config';
+import "./chat";
 import { roomRouter } from "./routes/rooms";
 
 const app = express()
