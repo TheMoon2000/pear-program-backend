@@ -30,6 +30,20 @@ roomRouter.get("/heartbeat", async (req, res) => {
     res.send(Array.from(roomTimeouts.keys()))
 })
 
+roomRouter.get("/testcases", async (req, res) => {
+    const conn = await getConnection()
+
+    try {
+        const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        res.json(testcases)
+    } catch (error) {
+        console.error(error)
+        res.sendStatus(500)
+    } finally {
+        conn.release()
+    }
+});
+
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
     const conn = await getConnection();
@@ -198,14 +212,6 @@ roomRouter.post("/", async (req, res) => {
 
         await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
 
-        // Set timeout to delete room upon creation of the room
-        roomTimeouts.set(sessionId, setTimeout(async () => {
-            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-            await terminateServer(sessionId)
-            roomTimeouts.delete(sessionId)
-            console.log("Deleted room", sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
-
         res.json({
             room_id: sessionId,
             existing: false,
@@ -249,11 +255,19 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
         }
 
         conn = await getConnection()
-        const [roomInfo] = await makeQuery(conn, "SELECT jupyter_server_token FROM Rooms WHERE id = ?", [req.params.room_id])
+        const [roomInfo] = await makeQuery(conn, "SELECT jupyter_server_token FROM Rooms WHERE id = ?", [sessionId])
 
         if (roomInfo.length === 0) {
             return res.status(404).send("Invalid room ID.")
         }
+
+        // Set timeout to close server upon initialization of the room server
+        roomTimeouts.set(sessionId, setTimeout(async () => {
+            await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
+        }, 1000 * 60 * 60)) // 1 hour
+
 
         const userToken = roomInfo[0].jupyter_server_token
 
@@ -273,7 +287,10 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         res.status(400).send("Session ID not provided")
     }
     try {
-        await terminateServer(sessionId);
+        await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
+        await execAsync(`docker exec env rm -rf /home/${sessionId}`)
+        await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
+        await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
 
         const conn = await getConnection()
         await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
@@ -286,13 +303,6 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         return res.status(400).send("Server not opened")
     }
 })
-
-const terminateServer = async (sessionId: string) => {
-    await execAsync(`docker exec env deluser ${sessionId}`).catch(err => err)
-    await execAsync(`docker exec env rm -rf /home/${sessionId}`)
-    await hubInstance.delete(`/users/${sessionId}/server`).catch(err => {})
-    await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
-};
 
 roomRouter.post("/:room_id/restart-server", async (req, res) => {
     const userData = await hubInstance.get(`/users/${req.params.room_id}`)
@@ -437,25 +447,13 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
     try {
         const timeout = roomTimeouts.get(sessionId)
         if (timeout) {
-            clearTimeout(roomTimeouts.get(sessionId))
-            roomTimeouts.set(sessionId, setTimeout(async () => {
-                await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-                await terminateServer(sessionId)
-                roomTimeouts.delete(sessionId)
-                console.log("Deleted room", sessionId)
-            }, 1000 * 60 * 60)) // 1 hour
-        } else {
-            const [room] = await makeQuery(conn,`SELECT * FROM Rooms WHERE id = ?`,[sessionId])
-            if (room.length === 0) {
-                return res.status(404).send("Did not find the room with the given id")
-            }
-            roomTimeouts.set(sessionId, setTimeout(async () => {
-                await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [sessionId])
-                await terminateServer(sessionId)
-                roomTimeouts.delete(sessionId)
-                console.log("Deleted room", sessionId)
-            }, 1000 * 60 * 60))
+            clearTimeout(timeout)
         }
+        roomTimeouts.set(sessionId, setTimeout(async () => {
+            await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+            roomTimeouts.delete(sessionId)
+            console.log("Deleted room", sessionId)
+        }, 1000 * 60 * 60)) // 1 hour
 
         console.log("Heartbeat received for room", sessionId)
         res.status(200).send("Heartbeat received")
