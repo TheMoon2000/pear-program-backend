@@ -294,7 +294,11 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
 
         const conn = await getConnection()
-        await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
+        const [roomInfo] = await makeQuery(conn, "SELECT dyte_meeting_id FROM Rooms WHERE id = ?", [req.params.room_id])
+        if (roomInfo.length > 0) {
+            await dyteInstance.patch(`/meetings/${roomInfo[0].dyte_meeting_id}`, { status: "INACTIVE" })
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
+        }
 
         conn.release()
 
