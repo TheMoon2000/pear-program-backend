@@ -6,6 +6,7 @@ import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
+import { sendNotificationToRoom } from "../chat";
 
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
@@ -471,5 +472,20 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
         res.status(500).send("Internal server error")
     } finally {
         conn.release()
+    }
+})
+
+// Internal testing only
+roomRouter.post("/:room_id/notification", async (req, res) => {
+    const message = req.body?.message
+    if (typeof message !== "string") {
+        return res.status(400).send("Notification must provide `message` as string in body")
+    }
+
+    const success = await sendNotificationToRoom(req.params.room_id, message)
+    if (success) {
+        return res.status(200).send("Successfully sent notification")
+    } else {
+        res.status(400).send("Cannot send message to inactive room.")
     }
 })
