@@ -364,7 +364,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
 
     try {
         // Update on DB
-        const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, last_updated = Now() WHERE id = ?", [req.body.file, req.body.author_map, req.params.room_id])
+        const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, last_updated = Now(3) WHERE id = ?", [req.body.file, req.body.author_map, req.params.room_id])
         
         if (room.affectedRows === 0) {
             return res.status(404).send("Room not found")
