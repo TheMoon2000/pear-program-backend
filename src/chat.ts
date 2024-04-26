@@ -4,12 +4,11 @@ import { getConnection, makeQuery } from "./utils/database";
 import { ChatMessage } from "./constants";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, Set<WebSocket>>()
+const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], name: string}>()
 
 const sqlConnection = getConnection(Infinity)
 
 async function sql(query: string, params?: any[]) {
-    const connection = await getConnection()
     return (await makeQuery(await sqlConnection, query, params))[0]
 }
 
@@ -22,29 +21,42 @@ chatServer.on("connection", (ws, request) => {
         return ws.close(4000, "Must provide room_id and email in query parameter")
     }
 
-    let history: ChatMessage[] | undefined = undefined
+    if (!socketMap.has(roomId)) {
+        socketMap.set(roomId, {
+            connections: new Set([ws]),
+            history: [],
+            name: "Loading..."
+        })
+    }
     
     sql("SELECT chat_history FROM Rooms WHERE id = ?", [roomId]).then((room => {
         if (room.length === 0) {
             return ws.close(4004, "Did not find room id")
         }
-        history = room[0].chat_history
-        if (!socketMap.has(roomId)) {
-            socketMap.set(roomId, new Set())
-        }
-
-        socketMap.get(roomId)?.add(ws)
+        const history = room[0].chat_history ?? []
+        socketMap.get(roomId)!.connections.add(ws)
+        socketMap.get(roomId)!.history = history // replace room info with newest chat history
+        
         ws.send(JSON.stringify(history))
     }))
+
+    sql("SELECT name FROM Users WHERE email = ?", [email]).then(name => {
+        if (name.length === 0) {
+            return ws.close(4004, "Did not find email in database.")
+        }
+        socketMap.get(roomId)!.name = name[0].name
+    })
 
     ws.on("message", (data: Buffer, isBinary) => {
         if (isBinary) {
             return ws.close(4000, "This socket not accept binary data!")
         } else if (!email) {
             return ws.close(4000, "Visitors cannot send messages!")
-        } else if (!history) {
-            return ws.send(JSON.stringify({ event: "error", message: "Chat room not ready." }))
         }
+
+        const roomInfo = socketMap.get(roomId)!
+        const history = roomInfo.history
+
         try {
             const rawMessage = JSON.parse(data.toString())
             /* Check */
@@ -54,7 +66,11 @@ chatServer.on("connection", (ws, request) => {
             }
             
             if (action === "start_typing" || action === "stop_typing") {
-                return ws.send(JSON.stringify({ sender: email, event: action }))
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    if (roomWs !== ws) {
+                        return roomWs.send(JSON.stringify({ sender: email, event: action }))
+                    }
+                })
             } else if (action === "send_text") {
                 const content = rawMessage.content as string
                 if (typeof content !== "string") {
@@ -66,15 +82,16 @@ chatServer.on("connection", (ws, request) => {
                 const message = {
                     content: [{ type: "text", value: content }] as { type: "text" | "choices", value: string }[],
                     sender: email,
+                    name: roomInfo.name,
                     timestamp: new Date().toISOString(),
                     message_id: history.length
                 }
                 history.push(message)
-                socketMap.get(roomId)?.forEach(roomWs => {
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
                     roomWs.send(JSON.stringify({...message, event: "send_message"}))
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
-                    socketMap.get(roomId)?.forEach(roomWs => {
+                    socketMap.get(roomId)?.connections.forEach(roomWs => {
                         roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
@@ -86,12 +103,11 @@ chatServer.on("connection", (ws, request) => {
                 if ([messageId, contentIndex, choiceIndex].some(i => !Number.isInteger(i))) {
                     return ws.close(4000, "In order to make choice, must provide integer `message_id`, `content_index`, and `choice_index`.")
                 }
-                console.log(history[messageId])
-                if (history[messageId]?.content[contentIndex]?.value[choiceIndex] === undefined) {
+                if (history[messageId]?.content?.[contentIndex]?.value[choiceIndex] === undefined) {
                     return ws.close(4000, "A combination of `message_id`, `content_index`, and `choice_index` is invalid.")
                 }
-                history[messageId].content[contentIndex].choice_index = choiceIndex
-                socketMap.get(roomId)?.forEach(roomWs => {
+                history[messageId].content![contentIndex].choice_index = choiceIndex
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
                     roomWs.send(JSON.stringify({
                         sender: email,
                         event: "make_choice",
@@ -101,7 +117,7 @@ chatServer.on("connection", (ws, request) => {
                     }))
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
-                    socketMap.get(roomId)?.forEach(roomWs => {
+                    socketMap.get(roomId)?.connections.forEach(roomWs => {
                         roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
@@ -120,7 +136,35 @@ chatServer.on("connection", (ws, request) => {
     })
 
     ws.on("close", (code, reason) => {
-        socketMap.get(roomId)?.delete(ws)
-        console.log(`socket closed with code ${code} and reason ${reason}`);
+        socketMap.get(roomId)?.connections.delete(ws)
+        if (socketMap.get(roomId)?.connections?.size === 0) {
+            socketMap.delete(roomId)
+            console.log(`All participants left room ${roomId}, closing...`)
+        }
+        console.log(`(socket closed with code ${code})`);
     })
 })
+
+export async function sendNotificationToRoom(roomId: string, message: string) {
+    const roomInfo = socketMap.get(roomId)
+    if (!roomInfo) {
+        return false
+    }
+
+    const notification = {
+        sender: "system",
+        message_id: roomInfo.history.length,
+        system_message: message,
+        timestamp: new Date().toISOString()
+    }
+    roomInfo.history.push(notification)
+    await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
+        socketMap.get(roomId)?.connections.forEach(roomWs => {
+            roomWs.close(4000, "Chat room is not writable.")
+        })
+    })
+    roomInfo.connections.forEach(roomWs => {
+        roomWs.send(JSON.stringify(notification))
+    })
+    return true
+} 

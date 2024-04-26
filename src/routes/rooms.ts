@@ -6,6 +6,7 @@ import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
+import { sendNotificationToRoom } from "../chat";
 
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
@@ -448,16 +449,43 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
         const timeout = roomTimeouts.get(sessionId)
         if (timeout) {
             clearTimeout(timeout)
-        }
-        roomTimeouts.set(sessionId, setTimeout(async () => {
-            await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
-            roomTimeouts.delete(sessionId)
-            console.log("Deleted room", sessionId)
-        }, 1000 * 60 * 60)) // 1 hour
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+                roomTimeouts.delete(sessionId)
+                console.log("Deallocated server for room", sessionId)
+            }, 1000 * 60 * 60)) // 1 hour
+        } else {
+            const [roomInfo] = await makeQuery(conn, "SELECT id FROM Rooms WHERE id = ?", [sessionId])
+            if (roomInfo.length === 0) {
+                return res.status(404).send("Room id not found.")
+            }
 
-        console.log("Heartbeat received for room", sessionId)
+            roomTimeouts.set(sessionId, setTimeout(async () => {
+                await hubInstance.delete(`/users/${sessionId}/server`, undefined).catch(err => {})
+                roomTimeouts.delete(sessionId)
+                console.log("Deallocated server for room", sessionId)
+            }, 1000 * 60 * 60))
+        }
+
         res.status(200).send("Heartbeat received")
-    } catch{
+    } catch {
         res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
+    }
+})
+
+// Internal testing only
+roomRouter.post("/:room_id/notification", async (req, res) => {
+    const message = req.body?.message
+    if (typeof message !== "string") {
+        return res.status(400).send("Notification must provide `message` as string in body")
+    }
+
+    const success = await sendNotificationToRoom(req.params.room_id, message)
+    if (success) {
+        return res.status(200).send("Successfully sent notification")
+    } else {
+        res.status(400).send("Cannot send message to inactive room.")
     }
 })

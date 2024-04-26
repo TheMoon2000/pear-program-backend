@@ -9,9 +9,10 @@ export interface ChatMessage {
     sender: string
     timestamp: string // ISO 8601 string
     message_id: number
-    content: {
+    content?: {
         type: "text" | "choices",
         value: string | string[]
         choice_index?: number
     }[]
+    system_message?: string
 }
