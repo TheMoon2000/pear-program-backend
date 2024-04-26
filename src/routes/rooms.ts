@@ -381,7 +381,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         [req.params.room_id, req.body.file, req.body.author_map, question_id])
 
         // Update on server
-        // await execAsync(`docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`)
+        await execAsync(`docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`)
 
         await conn.commit()
         
@@ -456,8 +456,8 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
 // Update question id of room
 roomRouter.patch("/:room_id", async (req, res) => {
 
-    if (typeof req.body?.question_id !== "string") {
-        return res.status(400).send("Must provide `question_id` as string in body.")
+    if (typeof req.body?.question_id !== "string" || typeof req.body?.name !== "string") {
+        return res.status(400).send("Must provide `question_id` and `name` as string in body.")
     }
 
     const conn = await getConnection()
