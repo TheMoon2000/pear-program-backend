@@ -5,7 +5,7 @@ import { ChatMessage } from "./constants";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
 const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[]}>()
-const nameMap = new Map<WebSocket, string>()
+const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
 const sqlConnection = getConnection(Infinity)
 
@@ -44,7 +44,7 @@ chatServer.on("connection", (ws, request) => {
         if (name.length === 0) {
             return ws.close(4004, "Did not find email in database.")
         }
-        nameMap.set(ws, name[0].name)
+        identityMap.set(ws, { name: name[0].name, email: email })
 
         socketMap.get(roomId)?.connections.forEach(roomWs => {
             // if ()
@@ -87,7 +87,7 @@ chatServer.on("connection", (ws, request) => {
                 const message = {
                     content: [{ type: "text", value: content }] as { type: "text" | "choices", value: string }[],
                     sender: email,
-                    name: nameMap.get(ws),
+                    name: identityMap.get(ws)?.name,
                     timestamp: new Date().toISOString(),
                     message_id: history.length
                 }
@@ -142,8 +142,8 @@ chatServer.on("connection", (ws, request) => {
 
     ws.on("close", (code, reason) => {
         socketMap.get(roomId)?.connections.delete(ws)
-        const leftUser = nameMap.get(ws)
-        nameMap.delete(ws)
+        const leftUser = identityMap.get(ws)
+        identityMap.delete(ws)
         sendNotificationToRoom(roomId, `${leftUser} has left the room.`)
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.delete(roomId)
@@ -175,4 +175,24 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
         roomWs.send(JSON.stringify(notification))
     })
     return true
-} 
+}
+
+export async function sendEventOfType(roomId: string, eventType: "autograder_update" | "terminal_started", senderEmail: string, data: Record<string, any>) {
+    const roomInfo = socketMap.get(roomId)
+    if (!roomInfo) {
+        return false
+    }
+
+    const eventJSON = {
+        sender: "system",
+        event: eventType,
+        ...data
+    }
+
+    // Broadcast to all users who are not the sender
+    roomInfo.connections.forEach(roomWs => {
+        if (identityMap.get(roomWs)?.email !== senderEmail) {
+            roomWs.send(JSON.stringify(eventJSON))
+        }
+    })
+}
