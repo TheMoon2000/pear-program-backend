@@ -6,6 +6,7 @@ import axios from "axios";
 import 'dotenv/config';
 import "./chat";
 import { roomRouter } from "./routes/rooms";
+import { getConnection, makeQuery } from "./utils/database";
 
 const app = express()
 const port = 8010
@@ -21,6 +22,19 @@ app.get("/", async (req, res) => {
     res.send("success")
 })
 
+app.get("/questions", async (req, res) => {
+    const conn = await getConnection()
+
+    try {
+        const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        res.json(testcases)
+    } catch (error) {
+        console.error(error)
+        res.sendStatus(500)
+    } finally {
+        conn.release()
+    }
+});
 
 app.listen(port, () => {
     console.log(`Pear Program backend listening on port ${port}`)

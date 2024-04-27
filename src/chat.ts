@@ -4,7 +4,8 @@ import { getConnection, makeQuery } from "./utils/database";
 import { ChatMessage } from "./constants";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], name: string}>()
+const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[]}>()
+const nameMap = new Map<WebSocket, string>()
 
 const sqlConnection = getConnection(Infinity)
 
@@ -25,7 +26,6 @@ chatServer.on("connection", (ws, request) => {
         socketMap.set(roomId, {
             connections: new Set([ws]),
             history: [],
-            name: "Loading..."
         })
     }
     
@@ -44,7 +44,12 @@ chatServer.on("connection", (ws, request) => {
         if (name.length === 0) {
             return ws.close(4004, "Did not find email in database.")
         }
-        socketMap.get(roomId)!.name = name[0].name
+        nameMap.set(ws, name[0].name)
+
+        socketMap.get(roomId)?.connections.forEach(roomWs => {
+            // if ()
+            sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
+        })
     })
 
     ws.on("message", (data: Buffer, isBinary) => {
@@ -82,7 +87,7 @@ chatServer.on("connection", (ws, request) => {
                 const message = {
                     content: [{ type: "text", value: content }] as { type: "text" | "choices", value: string }[],
                     sender: email,
-                    name: roomInfo.name,
+                    name: nameMap.get(ws),
                     timestamp: new Date().toISOString(),
                     message_id: history.length
                 }
@@ -137,6 +142,9 @@ chatServer.on("connection", (ws, request) => {
 
     ws.on("close", (code, reason) => {
         socketMap.get(roomId)?.connections.delete(ws)
+        const leftUser = nameMap.get(ws)
+        nameMap.delete(ws)
+        sendNotificationToRoom(roomId, `${leftUser} has left the room.`)
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.delete(roomId)
             console.log(`All participants left room ${roomId}, closing...`)

@@ -31,20 +31,6 @@ roomRouter.get("/heartbeat", async (req, res) => {
     res.send(Array.from(roomTimeouts.keys()))
 })
 
-roomRouter.get("/testcases", async (req, res) => {
-    const conn = await getConnection()
-
-    try {
-        const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
-        res.json(testcases)
-    } catch (error) {
-        console.error(error)
-        res.sendStatus(500)
-    } finally {
-        conn.release()
-    }
-});
-
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
     const conn = await getConnection();
@@ -268,7 +254,6 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
             roomTimeouts.delete(sessionId)
             console.log("Deleted room", sessionId)
         }, 1000 * 60 * 60)) // 1 hour
-
 
         const userToken = roomInfo[0].jupyter_server_token
 
