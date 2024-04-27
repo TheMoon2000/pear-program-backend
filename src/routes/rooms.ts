@@ -70,8 +70,8 @@ roomRouter.get("/:room_id", async(req, res) => {
             return res.status(404).send("Did not find the room with the given id")
         }
 
-        const rustpadHistory = await axios.get(`http://rustpad.io/api/text/${req.params.room_id}`)
-        const authorHistory = await axios.get(`http://rustpad.io/api/text/${req.params.room_id}-authors`)
+        const rustpadHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}`)
+        const authorHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}-authors`)
         if (rustpadHistory.data) {
             room[0].rustpad_code = rustpadHistory.data
         }
@@ -368,7 +368,7 @@ roomRouter.post("/:room_id/code", async (req, res) => {
             const [roomInfo] = await makeQuery(conn, "SELECT question_id FROM Rooms WHERE id = ?", [req.params.room_id])
             question_id = roomInfo[0].question_id
         }
-        await makeQuery(conn, "INSERT INTO Snapshots (room_id, code, author_map, question_id) VALUES (?, ?, ?, ?)" , 
+        await makeQuery(conn, "INSERT IGNORE INTO Snapshots (room_id, code, author_map, question_id) VALUES (?, ?, ?, ?)" , 
         [req.params.room_id, req.body.file, req.body.author_map, question_id])
 
         // Update on server
@@ -527,3 +527,12 @@ roomRouter.post("/:room_id/notification", async (req, res) => {
         res.status(400).send("Cannot send message to inactive room.")
     }
 })
+
+// Internal use
+export async function getCodeHistoryOfRoom(roomId: string) {
+    const conn = await getConnection()
+    const [snapshots] = await makeQuery(conn, `SELECT * FROM Snapshots WHERE room_id = ? ORDER BY timestamp`, [roomId])
+    conn.release()
+    
+    return snapshots
+}

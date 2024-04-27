@@ -1,10 +1,11 @@
 import { WebSocket, WebSocketServer } from "ws"
 import url from 'url';
 import { getConnection, makeQuery } from "./utils/database";
-import { ChatMessage } from "./constants";
+import { ChatMessage, ParticipantInfo } from "./constants";
+import Bruno from "./bruno";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[]}>()
+const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
 const sqlConnection = getConnection(Infinity)
@@ -22,23 +23,53 @@ chatServer.on("connection", (ws, request) => {
         return ws.close(4000, "Must provide room_id and email in query parameter")
     }
 
-    if (!socketMap.has(roomId)) {
-        socketMap.set(roomId, {
-            connections: new Set([ws]),
-            history: [],
-        })
-    }
-    
-    sql("SELECT chat_history FROM Rooms WHERE id = ?", [roomId]).then((room => {
-        if (room.length === 0) {
-            return ws.close(4004, "Did not find room id")
-        }
-        const history = room[0].chat_history ?? []
-        socketMap.get(roomId)!.connections.add(ws)
-        socketMap.get(roomId)!.history = history // replace room info with newest chat history
-        
-        ws.send(JSON.stringify(history))
-    }))
+    const chatHistoryPromise = new Promise<Bruno>((r, _) => {
+        sql("SELECT chat_history FROM Rooms WHERE id = ?", [roomId]).then((room => {
+            if (room.length === 0) {
+                return ws.close(4004, "Did not find room id")
+            }
+            const history = room[0].chat_history ?? []
+            
+            ws.send(JSON.stringify(history))
+
+            const bruno = new Bruno(roomId, history, async (message) => {
+                const roomInfo = socketMap.get(roomId)
+                if (!roomInfo) { return }
+
+                const fullMessage: ChatMessage = {
+                    message_id: roomInfo.history.length,
+                    sender: "AI",
+                    content: message,
+                    timestamp: new Date().toISOString()
+                }
+                roomInfo.history.push(fullMessage)
+
+                await Promise.all(Array.from(socketMap.get(roomId)?.connections ?? []).map(roomWs => {
+                    return new Promise((r, _) => {
+                        roomWs.send(JSON.stringify(fullMessage), r)
+                    })
+                }))
+
+                await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
+                    socketMap.get(roomId)?.connections.forEach(roomWs => {
+                        roomWs.close(4000, "Chat room is not writable.")
+                    })
+                })
+            })
+
+            if (!socketMap.has(roomId)) {
+                socketMap.set(roomId, {
+                    connections: new Set([ws]),
+                    history: history,
+                    ai: bruno
+                })
+            } else {
+                socketMap.get(roomId)!.connections.add(ws)
+                socketMap.get(roomId)!.history = history // replace room info with newest chat history
+            }
+            r(bruno)
+        }))
+    })
 
     sql("SELECT name FROM Users WHERE email = ?", [email]).then(name => {
         if (name.length === 0) {
@@ -47,10 +78,23 @@ chatServer.on("connection", (ws, request) => {
         identityMap.set(ws, { name: name[0].name, email: email })
 
         socketMap.get(roomId)?.connections.forEach(roomWs => {
-            // if ()
-            sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
+            if (identityMap.get(roomWs)?.email !== email) {
+                sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
+            }
         })
     })
+
+    chatHistoryPromise.then((bruno) => {
+        sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
+            const activeEmails = Array.from(identityMap.values()).map(v => v.email)
+            const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
+                name: p.name, email: p.user_email, id: i,
+                isOnline: p.user_email === email || activeEmails.includes(p.user_email)
+            }))
+            bruno.onParticipantsUpdated(currentParticipants)
+        })
+    })
+
 
     ws.on("message", (data: Buffer, isBinary) => {
         if (isBinary) {
@@ -96,10 +140,11 @@ chatServer.on("connection", (ws, request) => {
                     roomWs.send(JSON.stringify({...message, event: "send_message"}))
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
-                    socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    roomInfo.connections.forEach(roomWs => {
                         roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
+                roomInfo.ai.onChatHistoryUpdated(history, "send_text")
             } else if (action === "make_choice") {
                 const messageId = rawMessage.message_id
                 const contentIndex = rawMessage.content_index
@@ -122,10 +167,11 @@ chatServer.on("connection", (ws, request) => {
                     }))
                 })
                 sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(history), roomId]).catch(() => {
-                    socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    roomInfo.connections.forEach(roomWs => {
                         roomWs.close(4000, "Chat room is not writable.")
                     })
                 })
+                roomInfo.ai.onChatHistoryUpdated(history, "make_choice", {messageId, contentIndex, choiceIndex})
             } else {
                 return ws.close(4000, `Action '${action}' is unrecognized.`)
             }
@@ -146,9 +192,21 @@ chatServer.on("connection", (ws, request) => {
         identityMap.delete(ws)
         sendNotificationToRoom(roomId, `${leftUser} has left the room.`)
         if (socketMap.get(roomId)?.connections?.size === 0) {
+            socketMap.get(roomId)?.ai.onRoomClose()
             socketMap.delete(roomId)
             console.log(`All participants left room ${roomId}, closing...`)
+        } else {
+            sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
+                const activeEmails = Array.from(identityMap.values()).map(v => v.email)
+                const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
+                    name: p.name, email: p.user_email, id: i,
+                    isOnline: activeEmails.includes(p.user_email)
+                }))
+                socketMap.get(roomId)?.ai.onParticipantsUpdated(currentParticipants)
+            })
         }
+
+
         console.log(`(socket closed with code ${code})`);
     })
 })
