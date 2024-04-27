@@ -31,19 +31,6 @@ roomRouter.get("/heartbeat", async (req, res) => {
     res.send(Array.from(roomTimeouts.keys()))
 })
 
-roomRouter.get("/testcases", async (req, res) => {
-    const conn = await getConnection()
-
-    try {
-        const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
-        res.json(testcases)
-    } catch (error) {
-        console.error(error)
-        res.sendStatus(500)
-    } finally {
-        conn.release()
-    }
-});
 
 // Get all rooms the user has participated in
 roomRouter.post("/participations", async (req, res) => {
@@ -68,6 +55,7 @@ roomRouter.post("/participations", async (req, res) => {
         conn.release()
     }
 })
+
 
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
@@ -293,7 +281,6 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
             console.log("Deleted room", sessionId)
         }, 1000 * 60 * 60)) // 1 hour
 
-
         const userToken = roomInfo[0].jupyter_server_token
 
         const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
@@ -318,7 +305,11 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
         await hubInstance.delete(`/users/${sessionId}`).catch(err => {})
 
         const conn = await getConnection()
-        await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
+        const [roomInfo] = await makeQuery(conn, "SELECT dyte_meeting_id FROM Rooms WHERE id = ?", [req.params.room_id])
+        if (roomInfo.length > 0) {
+            await dyteInstance.patch(`/meetings/${roomInfo[0].dyte_meeting_id}`, { status: "INACTIVE" })
+            await makeQuery(conn, "DELETE FROM Rooms WHERE id = ?", [req.params.room_id])
+        }
 
         conn.release()
 
