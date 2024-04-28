@@ -8,10 +8,11 @@ const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTrac
 const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
-const sqlConnection = getConnection(Infinity)
-
 async function sql(query: string, params?: any[]) {
-    return (await makeQuery(await sqlConnection, query, params))[0]
+    const connection = await getConnection()
+    const returnValue = (await makeQuery(connection, query, params))[0]
+    connection.release()
+    return returnValue
 }
 
 chatServer.on("connection", (ws, request) => {
@@ -190,7 +191,7 @@ chatServer.on("connection", (ws, request) => {
         socketMap.get(roomId)?.connections.delete(ws)
         const leftUser = identityMap.get(ws)
         identityMap.delete(ws)
-        sendNotificationToRoom(roomId, `${leftUser} has left the room.`)
+        sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.get(roomId)?.ai.onRoomClose()
             socketMap.delete(roomId)
