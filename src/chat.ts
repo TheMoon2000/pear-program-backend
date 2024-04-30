@@ -20,7 +20,7 @@ chatServer.on("connection", (ws, request) => {
     const query = url.parse(request.url ?? '', true).query;
     const roomId = query.room_id as string
     const email = query.email as string
-    if (!roomId) {
+    if (!roomId || typeof email !== "string") {
         return ws.close(4000, "Must provide room_id and email in query parameter")
     }
 
@@ -73,16 +73,15 @@ chatServer.on("connection", (ws, request) => {
     })
 
     sql("SELECT name FROM Users WHERE email = ?", [email]).then(name => {
-        if (name.length === 0) {
+        if (name.length === 0 && email.length > 0) {
             return ws.close(4004, "Did not find email in database.")
         }
-        identityMap.set(ws, { name: name[0].name, email: email })
 
-        socketMap.get(roomId)?.connections.forEach(roomWs => {
-            if (identityMap.get(roomWs)?.email !== email) {
-                sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
-            }
-        })
+        identityMap.set(ws, { name: name[0]?.name ?? "Guest", email: email })
+
+        if (name[0]?.name) {
+            sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
+        }
     })
 
     chatHistoryPromise.then((bruno) => {
@@ -191,12 +190,14 @@ chatServer.on("connection", (ws, request) => {
         socketMap.get(roomId)?.connections.delete(ws)
         const leftUser = identityMap.get(ws)
         identityMap.delete(ws)
-        sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
+        if (leftUser?.email) {
+            sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
+        }
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.get(roomId)?.ai.onRoomClose()
             socketMap.delete(roomId)
             console.log(`All participants left room ${roomId}, closing...`)
-        } else {
+        } else if (leftUser?.email) {
             sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
                 const activeEmails = Array.from(identityMap.values()).map(v => v.email)
                 const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
