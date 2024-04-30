@@ -6,7 +6,7 @@ import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
-import { sendNotificationToRoom } from "../chat";
+import { sendNotificationToRoom, sendEventOfType } from "../chat";
 
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
@@ -31,6 +31,20 @@ roomRouter.get("/heartbeat", async (req, res) => {
     res.send(Array.from(roomTimeouts.keys()))
 })
 
+// Get all question testcases
+roomRouter.get("/testcases", async (req, res) => {
+    const conn = await getConnection()
+
+    try {
+        const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        res.json(testcases)
+    } catch (error) {
+        console.error(error)
+        res.sendStatus(500)
+    } finally {
+        conn.release()
+    }
+});
 
 // Get all rooms the user has participated in
 roomRouter.post("/participations", async (req, res) => {
@@ -155,7 +169,7 @@ roomRouter.post("/", async (req, res) => {
     const conn = await getConnection()
     try {
         /* In either case, register the user first */
-        await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW()", [userEmail, username, username])
+        await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW(3)", [userEmail, username, username])
 
         const [mostRecentRoom] = await makeQuery(conn, "SELECT * FROM Rooms ORDER BY creation_date DESC LIMIT 1")
 
@@ -243,6 +257,10 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
     if (!sessionId) {
         res.status(400).send("Session ID not provided")
     }
+
+    if (typeof req.body?.email !== "string") {
+        return res.status(400).send("Must provide `email` in body.")
+    }
     let conn: PoolConnection | undefined
 
     try {
@@ -263,6 +281,8 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
             }
 
             const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
+            
+            await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name })
             return res.json({ "terminal_id": newTerminal.name })
             // return res.status(400).send("Server already started")
         }
@@ -284,6 +304,8 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
         const userToken = roomInfo[0].jupyter_server_token
 
         const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
+
+        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: terminalResponse.name })
 
         res.json({ "token": userToken, "terminal_id": terminalResponse.name })
     } catch (error) {
@@ -321,6 +343,11 @@ roomRouter.post("/:room_id/terminate-server", async (req, res) => {
 })
 
 roomRouter.post("/:room_id/restart-server", async (req, res) => {
+
+    if (typeof req.body?.email !== "string") {
+        return res.status(400).send("Must provide `email` in body.")
+    }
+
     const userData = await hubInstance.get(`/users/${req.params.room_id}`)
         .then(r => r.data)
         .catch(err => {
@@ -335,6 +362,8 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
         }
 
         const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
+
+        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name })
 
         res.json({
             user: userData,
@@ -432,9 +461,14 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
         return res.status(400).send("Must provide `test_results` as array in body.")
     }
 
+    if (typeof req.body?.email !== "string") {
+        return res.status(400).send("Must provide `email` as string in body.")
+    }
+
     const conn = await getConnection()
     try {
         await makeQuery(conn, "UPDATE Rooms SET test_results = ? WHERE id = ?", [JSON.stringify(req.body.test_results), req.params.room_id])
+        await sendEventOfType(req.params.room_id, "autograder_update", req.body.email, req.body.test_results)
         res.send()
     } catch (error) {
         console.log(error)
@@ -458,8 +492,8 @@ roomRouter.patch("/:room_id", async (req, res) => {
             return res.status(404).send("Question id not found.")
         }
 
-        const author_map = [...testCases[0].starter_code].map((char: string) => { if (char === "\n") return char; return "?"}).join("")
-
+        const author_map = testCases[0].starter_code.replace(/[^\n]/g, "?")
+        
         const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, question_id = ? WHERE id = ?", 
                         [testCases[0].starter_code, author_map, req.body.question_id, req.params.room_id])
         if (room.affectedRows === 0) {
