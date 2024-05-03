@@ -25,15 +25,16 @@ chatServer.on("connection", (ws, request) => {
     }
 
     const chatHistoryPromise = new Promise<Bruno>((r, _) => {
-        sql("SELECT chat_history FROM Rooms WHERE id = ?", [roomId]).then((room => {
+        sql("SELECT chat_history, `condition` FROM Rooms WHERE id = ?", [roomId]).then((room => {
             if (room.length === 0) {
                 return ws.close(4004, "Did not find room id")
             }
             const history = room[0].chat_history ?? []
+            const condition = room[0].condition as number
             
             ws.send(JSON.stringify(history))
 
-            const bruno = new Bruno(roomId, history, async (message) => {
+            const bruno = new Bruno(roomId, condition, history, async (message) => {
                 const roomInfo = socketMap.get(roomId)
                 if (!roomInfo) { return }
 
@@ -55,6 +56,10 @@ chatServer.on("connection", (ws, request) => {
                     socketMap.get(roomId)?.connections.forEach(roomWs => {
                         roomWs.close(4000, "Chat room is not writable.")
                     })
+                })
+            }, async (startTyping: boolean) => {
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
                 })
             })
 
@@ -117,7 +122,7 @@ chatServer.on("connection", (ws, request) => {
             if (action === "start_typing" || action === "stop_typing") {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     if (roomWs !== ws) {
-                        return roomWs.send(JSON.stringify({ sender: email, event: action }))
+                        return roomWs.send(JSON.stringify({ sender: email, name: identityMap.get(roomWs)?.name, event: action }))
                     }
                 })
             } else if (action === "send_text") {
@@ -172,6 +177,7 @@ chatServer.on("connection", (ws, request) => {
                     })
                 })
                 roomInfo.ai.onChatHistoryUpdated(history, "make_choice", {messageId, contentIndex, choiceIndex})
+                roomInfo.ai.onUserMakesChoice(messageId, contentIndex, choiceIndex)
             } else {
                 return ws.close(4000, `Action '${action}' is unrecognized.`)
             }
@@ -190,9 +196,6 @@ chatServer.on("connection", (ws, request) => {
         socketMap.get(roomId)?.connections.delete(ws)
         const leftUser = identityMap.get(ws)
         identityMap.delete(ws)
-        if (leftUser?.email) {
-            sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
-        }
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.get(roomId)?.ai.onRoomClose()
             socketMap.delete(roomId)
@@ -207,7 +210,10 @@ chatServer.on("connection", (ws, request) => {
                 socketMap.get(roomId)?.ai.onParticipantsUpdated(currentParticipants)
             })
         }
-
+        
+        if (leftUser?.email) {
+            sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
+        }
 
         console.log(`(socket closed with code ${code})`);
     })

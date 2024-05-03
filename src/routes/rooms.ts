@@ -114,7 +114,6 @@ roomRouter.get("/:room_id", async(req, res) => {
         const [selfParticipant] = await makeQuery(conn, 
             "SELECT dyte_participant_id AS participant_id, dyte_token FROM Participants WHERE room_id = ? AND user_email = ?", 
             [req.params.room_id, email])
-
         if (selfParticipant.length === 0) {
             selfParticipant.push({ participant_id: null, user_token: null})
         }
@@ -219,16 +218,15 @@ roomRouter.post("/", async (req, res) => {
         const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`).then(r => r.data)
         console.log(`got token ${userToken} for user ${sessionId}`)
 
-        /* Note: does not automatically create a jupyter server */
-        // await hubInstance.post(`/users/${sessionId}/server`, undefined) // start new server
-
-        // const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
-
+        // Count the number of existing rooms
+        const [roomCount] = await makeQuery(conn, "SELECT COUNT(id) as count FROM Rooms")
+        const condition = roomCount[0].count % 5
+        
         // Create Dyte meeting
         const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
         const meetingId = createMeetingResponse.data.id
 
-        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token) VALUES (?, '', '', ?, ?)", [sessionId, meetingId, userToken])
+        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token, `condition`) VALUES (?, '', '', ?, ?, ?)", [sessionId, meetingId, userToken, condition])
 
         // Insert participant into dyte meeting
         const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
