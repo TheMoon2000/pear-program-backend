@@ -90,10 +90,10 @@ chatServer.on("connection", (ws, request) => {
     })
 
     chatHistoryPromise.then((bruno) => {
-        sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
+        sql("SELECT user_email, joined_date, Users.name, role FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
             const activeEmails = Array.from(identityMap.values()).map(v => v.email)
             const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
-                name: p.name, email: p.user_email, id: i,
+                name: p.name, email: p.user_email, id: i, role: p.role,
                 isOnline: p.user_email === email || activeEmails.includes(p.user_email)
             }))
             bruno.onParticipantsUpdated(currentParticipants)

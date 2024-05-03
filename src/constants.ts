@@ -31,4 +31,12 @@ export interface ParticipantInfo {
     id: number
     email: string
     isOnline: boolean
+    role: number
+}
+
+export interface Snapshot {
+    timestamp: Date
+    code: string
+    author_map: string
+    question_id: string
 }

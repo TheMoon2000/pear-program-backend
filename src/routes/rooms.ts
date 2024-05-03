@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { exec } from "child_process";
 import fs from "fs";
-import { authHeader, hubInstance, serverInstance } from "../constants";
+import { Snapshot, authHeader, hubInstance, serverInstance } from "../constants";
 import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
@@ -561,9 +561,9 @@ roomRouter.post("/:room_id/notification", async (req, res) => {
 })
 
 // Internal use
-export async function getCodeHistoryOfRoom(roomId: string) {
+export async function getCodeHistoryOfRoom(roomId: string): Promise<Snapshot[]> {
     const conn = await getConnection()
-    const [snapshots] = await makeQuery(conn, `SELECT * FROM Snapshots WHERE room_id = ? ORDER BY timestamp`, [roomId])
+    const [snapshots] = await makeQuery(conn, `SELECT timestamp, code, author_map, question_id FROM Snapshots WHERE room_id = ? ORDER BY timestamp`, [roomId])
     conn.release()
     
     return snapshots

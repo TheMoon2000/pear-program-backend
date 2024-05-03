@@ -1,5 +1,6 @@
 import { ChatMessage, ChatMessageSection, ParticipantInfo } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
+import { getConnection, makeQuery } from "./utils/database"
 
 export default class Bruno {
     readonly roomId: string
@@ -29,7 +30,7 @@ export default class Bruno {
         console.log(`Room ${this.roomId} received updated participant list`, participants)
         console.log("Current chat history length:", this.currentChatHistory.length)
 
-        if (participants.length === 1 && this.currentChatHistory.length === 0) {
+        if (participants.length === 1 && this.currentChatHistory.filter(m => m.sender !== "system").length === 0) {
             const currentParticipant = participants[0]
             await this.sendTypingStatus(true)
             await sleep(1000)
