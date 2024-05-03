@@ -2,10 +2,11 @@ import { WebSocket, WebSocketServer } from "ws"
 import url from 'url';
 import { getConnection, makeQuery } from "./utils/database";
 import { ChatMessage, ParticipantInfo } from "./constants";
+import semaphore, { Semaphore } from "semaphore";
 import Bruno from "./bruno";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno}>()
+const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
 async function sql(query: string, params?: any[]) {
@@ -38,19 +39,23 @@ chatServer.on("connection", (ws, request) => {
                 const roomInfo = socketMap.get(roomId)
                 if (!roomInfo) { return }
 
-                const fullMessage: ChatMessage = {
-                    message_id: roomInfo.history.length,
-                    sender: "AI",
-                    content: message,
-                    timestamp: new Date().toISOString()
-                }
-                roomInfo.history.push(fullMessage)
+                roomInfo.sema.take(async () => {
+                    const fullMessage: ChatMessage = {
+                        message_id: roomInfo.history.length,
+                        sender: "AI",
+                        content: message,
+                        timestamp: new Date().toISOString()
+                    }
+                    roomInfo.history.push(fullMessage)
+                    
+                    await Promise.all(Array.from(socketMap.get(roomId)?.connections ?? []).map(roomWs => {
+                        return new Promise((r, _) => {
+                            roomWs.send(JSON.stringify(fullMessage), r)
+                        })
+                    }))
+                    roomInfo.sema.leave()
+                })
 
-                await Promise.all(Array.from(socketMap.get(roomId)?.connections ?? []).map(roomWs => {
-                    return new Promise((r, _) => {
-                        roomWs.send(JSON.stringify(fullMessage), r)
-                    })
-                }))
 
                 await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
                     socketMap.get(roomId)?.connections.forEach(roomWs => {
@@ -67,7 +72,8 @@ chatServer.on("connection", (ws, request) => {
                 socketMap.set(roomId, {
                     connections: new Set([ws]),
                     history: history,
-                    ai: bruno
+                    ai: bruno,
+                    sema: semaphore(1)
                 })
             } else {
                 socketMap.get(roomId)!.connections.add(ws)
@@ -225,25 +231,32 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
         return false
     }
 
-    const notification = {
-        sender: "system",
-        message_id: roomInfo.history.length,
-        system_message: message,
-        timestamp: new Date().toISOString()
-    }
-    roomInfo.history.push(notification)
-    await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
-        socketMap.get(roomId)?.connections.forEach(roomWs => {
-            roomWs.close(4000, "Chat room is not writable.")
+    await new Promise<void>((r, _) => {
+        roomInfo.sema.take(1, async () => {
+            const notification = {
+                sender: "system",
+                message_id: roomInfo.history.length,
+                system_message: message,
+                timestamp: new Date().toISOString()
+            }
+            roomInfo.history.push(notification)
+            await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    roomWs.close(4000, "Chat room is not writable.")
+                })
+            })
+            roomInfo.connections.forEach(roomWs => {
+                roomWs.send(JSON.stringify(notification))
+            })
+            roomInfo.sema.leave()
+            r()
         })
     })
-    roomInfo.connections.forEach(roomWs => {
-        roomWs.send(JSON.stringify(notification))
-    })
+
     return true
 }
 
-export async function sendEventOfType(roomId: string, eventType: "autograder_update" | "terminal_started", senderEmail: string, data: Record<string, any>) {
+export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started", senderEmail: string, data: Record<string, any>) {
     const roomInfo = socketMap.get(roomId)
     if (!roomInfo) {
         return false
