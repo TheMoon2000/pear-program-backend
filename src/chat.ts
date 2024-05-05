@@ -4,7 +4,7 @@ import { getConnection, makeQuery } from "./utils/database";
 import { ChatMessage, ParticipantInfo } from "./constants";
 import Bruno from "./bruno";
 
-const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
+const chatServer = new WebSocketServer({ port: 4011, path: "/socket", clientTracking: false, maxPayload: 1048576 })
 const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
