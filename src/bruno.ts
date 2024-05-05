@@ -1,3 +1,4 @@
+import { sendEventOfType, sendNotificationToRoom } from "./chat"
 import { ChatMessage, ChatMessageSection, ParticipantInfo } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
 import { getConnection, makeQuery } from "./utils/database"
@@ -382,6 +383,24 @@ export default class Bruno {
             section.choice_index = choiceIndex
         }
         console.log(`User made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
+
+        const conn = await getConnection() 
+        const [testCase] = await makeQuery(conn, "SELECT * FROM TestCases LIMIT ?, 1", [choiceIndex])
+
+        if (testCase.length === 0) {
+            console.warn("Selected test case not found")
+        } else {
+            const author_map = testCase[0].starter_code.replace(/[^\n]/g, "?")
+            const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, question_id = ? WHERE id = ?", [testCase[0].starter_code, author_map, testCase[0].question_id, this.roomId])
+            if (room.affectedRows === 0) {
+                console.warn("Room not found!")
+            } else {
+                await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
+                await sendEventOfType(this.roomId, "question_update", "AI", {"question": testCase[0]})
+            }
+        }
+
+        conn.release()
     }
 
     /**
