@@ -398,8 +398,12 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         await makeQuery(conn, "INSERT IGNORE INTO Snapshots (room_id, code, author_map, question_id) VALUES (?, ?, ?, ?)" , 
         [req.params.room_id, req.body.file, req.body.author_map, question_id])
 
-        // Update on server
-        await execAsync(`docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`)
+        // Update code on server
+        await serverInstance.put(`/${req.params.room_id}/api/contents/main.py`, {
+            type: "file",
+            format: "text",
+            content: req.body.file
+        }, { headers: authHeader })
 
         await conn.commit()
         

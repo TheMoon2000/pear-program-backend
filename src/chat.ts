@@ -43,6 +43,7 @@ chatServer.on("connection", (ws, request) => {
                     const fullMessage: ChatMessage = {
                         message_id: roomInfo.history.length,
                         sender: "AI",
+                        name: "Bruno",
                         content: message,
                         timestamp: new Date().toISOString()
                     }
@@ -142,7 +143,7 @@ chatServer.on("connection", (ws, request) => {
                 const message = {
                     content: [{ type: "text", value: content }] as { type: "text" | "choices", value: string }[],
                     sender: email,
-                    name: identityMap.get(ws)?.name,
+                    name: identityMap.get(ws)?.name ?? "Unknown",
                     timestamp: new Date().toISOString(),
                     message_id: history.length
                 }
@@ -235,6 +236,7 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
         roomInfo.sema.take(1, async () => {
             const notification = {
                 sender: "system",
+                name: "System",
                 message_id: roomInfo.history.length,
                 system_message: message,
                 timestamp: new Date().toISOString()

@@ -13,6 +13,7 @@ export interface ChatMessageSection {
 
 export interface ChatMessage {
     sender: string
+    name: string
     timestamp: string // ISO 8601 string
     message_id: number
     content?: ChatMessageSection[]
