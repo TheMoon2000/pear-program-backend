@@ -35,7 +35,7 @@ chatServer.on("connection", (ws, request) => {
             
             ws.send(JSON.stringify(history))
 
-            const bruno = new Bruno(roomId, condition, history, async (message) => {
+            let bruno = socketMap.get(roomId)?.ai ?? new Bruno(roomId, condition, history, async (message) => {
                 const roomInfo = socketMap.get(roomId)
                 if (!roomInfo) { return }
 
