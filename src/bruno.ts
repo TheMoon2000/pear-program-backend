@@ -1,5 +1,5 @@
 import { sendEventOfType, sendNotificationToRoom } from "./chat"
-import { ChatMessage, ChatMessageSection, ParticipantInfo } from "./constants"
+import { ChatMessage, ChatMessageSection, ParticipantInfo, BrunoState } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
 import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
@@ -10,7 +10,7 @@ import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
  + Add Bruno When Only 1 Participant Is In The Room (???)
  + Handle Case When Both Participants Go Offline (Giving Bruno context might be useful if room reinstated later?)
  + Pause periodic function when one participant goes offline (?)
- + 
+ + Switch all internal variables to dictionary state to send to Jerry
  + (Future) Calculate Conversation Data Metrics
 */
 
@@ -47,6 +47,8 @@ export default class Bruno {
 
     private periodicFunctionStarted: boolean
 
+    private state: BrunoState
+
     private initialPrompt =
       "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
           \
@@ -63,7 +65,7 @@ export default class Bruno {
      * @param roomId The ID of the room.
      * @param send An asynchronous function for sending messages as Bruno into the room.
      */
-    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>) {
+    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, savedState?: BrunoState) {
         this.roomId = roomId
         this.condition = condition
         this.send = send
@@ -78,55 +80,60 @@ export default class Bruno {
         this.introductionFlag = false
         this.periodicFunctionStarted = false
 
+        this.state = savedState ?? {stage: 0}
+
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
 
     async intersubjectivityIntervention(participants: ParticipantInfo[]){
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
-        if (codeHistory[codeHistory.length - 1].author_map.length > 0) {
+
+        var chunkSize = 10
+
+        //If code history longer than designated chunkSize
+        if (codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
             var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
 
             var numNewLines = code.match(/\n/g)?.length || -1
-            var chunkSize = 10
 
-            if (numNewLines < chunkSize) {
-                var newLineIndices: Number[] = [] 
-                for (let i = 0; i < code.length; i++) {
-                    if (code[i] === "\n") {
-                        newLineIndices.push(i)
-                    }
+            var newLineIndices: Number[] = [] 
+            for (let i = 0; i < code.length; i++) {
+                if (code[i] === "\n") {
+                    newLineIndices.push(i)
                 }
-
-                var firstNewLine = 0
-                var lastNewLine = chunkSize
-
-                var chunkNotFound = true
-                var chunkWriter = ""
-
-                while ((lastNewLine < numNewLines - 1) && chunkNotFound) {
-                    var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
-                    if (parseFloat(codePercentages[0]) >= 70) {
-                        chunkWriter = participants[0].name
-                        chunkNotFound = false
-                    }
-                    else if (parseFloat(codePercentages[1]) >= 70) {
-                        chunkWriter = participants[1].name
-                        chunkNotFound = false
-                    } else {
-                        firstNewLine = firstNewLine + 1
-                        lastNewLine = lastNewLine + 1
-                    }
-                }
-                
-                this.interventionSpecificMessages.push({
-                    role: "system",
-                    content: `There is a large chunk of code from lines ${firstNewLine} to ${lastNewLine} written predominantly by ${chunkWriter}. Encourage ${chunkWriter} to explain those specific lines of code to their partner. 
-                            Follow-up with the partner to ensure that they understand`,
-                });
-                // await this.gpt();
-                await this.gptLimitedContext();
-                this.interventionSpecificMessages.pop();
             }
+
+            var firstNewLine = 0
+            var lastNewLine = chunkSize
+
+            var chunkNotFound = true
+            var chunkWriter = ""
+
+
+            // TO DO: Will repeat the same chunk, need to remember which chunks have already been looked at
+            while ((lastNewLine < numNewLines - 1) && chunkNotFound) {
+                var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
+                if (parseFloat(codePercentages[0]) >= 70) {
+                    chunkWriter = participants[0].name
+                    chunkNotFound = false
+                }
+                else if (parseFloat(codePercentages[1]) >= 70) {
+                    chunkWriter = participants[1].name
+                    chunkNotFound = false
+                } else {
+                    firstNewLine = firstNewLine + 1
+                    lastNewLine = lastNewLine + 1
+                }
+            }
+            
+            this.interventionSpecificMessages.push({
+                role: "system",
+                content: `There is a large chunk of code from lines ${firstNewLine} to ${lastNewLine} written predominantly by ${chunkWriter}. Encourage ${chunkWriter} to explain those specific lines of code to their partner. 
+                        Follow-up with the partner to ensure that they understand`,
+            });
+            // await this.gpt();
+            await this.gptLimitedContext();
+            this.interventionSpecificMessages.pop();
         }
     }
 
@@ -275,46 +282,23 @@ export default class Bruno {
         }
 }
 
-    checkUpdated(participants: ParticipantInfo[]): boolean {
-        if (participants.length !== this.participantData.length)
-            return true
-        if (participants[0].email !== this.participantData[0].email || participants[0].id !== this.participantData[0].id || participants[0].isOnline !== this.participantData[0].isOnline || participants[0].name !== this.participantData[0].name || participants[0].role !== this.participantData[0].role)
-            return true
-        if (participants[1].email !== this.participantData[1].email || participants[1].id !== this.participantData[1].id || participants[1].isOnline !== this.participantData[1].isOnline || participants[1].name !== this.participantData[1].name || participants[1].role !== this.participantData[1].role)
-            return true
-        return false
-    }
-
     async onParticipantsUpdated(participants: ParticipantInfo[]) {
         console.log(`Room ${this.roomId} received updated participant list`, participants)
         console.log("Current chat history length:", this.currentChatHistory.length)
 
-        // if (this.checkUpdated(participants)) {
-        //     console.log(this.participantData)
-        //     console.log(participants)
         this.participantData = JSON.parse(JSON.stringify(participants));
 
-        await this.send([
-            {type: "text", value: `${participants.length} : PARTICIPANTS LENGTH`}
-        ])
-
+        // NEED TO FIGURE THIS OUT
         if (participants.length === 1 && this.currentChatHistory.filter(m => m.sender !== "system").length === 0) {
             const currentParticipant = participants[0]
             await this.sendTypingStatus(true)
             await sleep(1000)
             await this.sendTypingStatus(false)
-            // await this.send([
-            //     {type: "text", value: `Hi ${currentParticipant.name ?? "there"}! I am Bruno and will be your pair programming facilitator today.`}
-            // ])
-            // await sleep(1000)
 
             // TODO: Add Bruno Here
             await this.send([
                 {type: "text", value: "We are still waiting for one more person to join the session. In the meantime, let's get you set up."}
             ])
-            // await this.send([
-            //     {type: "text", value: "We are still waiting for one more person to join the session. In the meantime, can you tell me a little about yourself? Specifically:\n1. What assignment(s) have you been working on lately?\n2. How would you describe your coding level at this point?\n3. Are there any things you are hoping to get out of this session?"}
-            // ])
             await sleep(1000)
 
             await this.sendTypingStatus(true)
@@ -327,26 +311,19 @@ export default class Bruno {
         }
 
         else if (participants.length === 2 && (participants[0].isOnline === true && participants[1].isOnline === true)) {
-            await this.send([
-                {type: "text", value: "outer loop."}
-            ])
-            if (!(this.bothParticipantsJoined)) {  // If this is the first time both participants join
+            if (this.state.stage === 0) {
                 // Arbitrarily set participant 1 to role 1 and participant 2 to role 2
                 let conn = await getConnection()
                 await makeQuery(conn, "UPDATE Participants SET role = 1      WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
                 await makeQuery(conn, "UPDATE Participants SET role = 2 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[1].email])
-                // this.participantData = JSON.parse(JSON.stringify(participants));
 
                 this.participantNames[0] = participants[0].name
                 this.participantNames[1] = participants[1].name
 
                 this.brunoMessages.push({
                     role: "system",
-                    content:
-                    "Both students have joined the session. Student A's name is " +
-                    participants[0].name +
-                    ", Student B's name is " +
-                    participants[1].name,
+                    content: `Both students are in the session. Student A's name is ${participants[0].name}. Student B's name is ${participants[1].name}.`,
+
                 });
 
                 //INTERVENTION SPECIFIC
@@ -359,15 +336,24 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Hi, I'm Bruno your pair programming facillitator. I'm here to help you get the most out of this session. \n\nBefore we begin, take a moment to introduce yourself to your partner. Let me know once you are done."}
+                    {type: "text", value: "Hi, I'm Bruno your pair programming facillitator. I'm here to help you get the most out of this session."}
                 ])
                 await sleep(1000)
+
+                await this.send([
+                    {type: "text", value: "Before we begin, take a moment to introduce yourself to your partner. Let me know once you are done."},
+                    {type: "choices", value: ["Ready"]}
+                ])
 
                 this.bothParticipantsJoined = true
                 this.bothParticipantsOnline = true
                 conn.release()
+
+                this.state.stage = 1
+                await this.saveState()
+
             }
-            else if (!this.bothParticipantsOnline) {
+            else if (!this.bothParticipantsOnline) {  // If one participant was previously offline and now both are online, restart periodic function
                 this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), 5 * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
@@ -384,9 +370,12 @@ export default class Bruno {
             }
             
             if (studentName !== ""){
-                await this.send([{type: "text", value: studentName + " is currently offline. There is currently one student remaining in the room"}])
+                await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
                 // this.brunoMessages.push({role: "system", content: studentName + " is currently offline. There is currently one student remaining in the room"})
-                
+                await this.send([
+                    {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
+                    {type: "choices", value: ["Join New Coding Session [Currently Non-Functional]"]}
+                ])
                 // TODO: pause periodic function instead of clearing?
                 this.bothParticipantsOnline = false
                 clearInterval(this.periodicFunctionInstance)
@@ -414,50 +403,6 @@ export default class Bruno {
             //     content: newChatHistory[newChatHistory.length - 1].content,
             // });
             // await this.gpt();
-            if (!this.introductionFlag && this.bothParticipantsJoined && this.bothParticipantsOnline) {
-                // Obtain all question IDs and titles
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "Great. Here's some information on how to pair program effectively: " } ])
-                await sleep(1000)
-
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "Why Pair Programing? [Text]" } ])
-                await sleep(1000)
-
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "Learn Goals of Pair Programming [Text]" } ])
-                await sleep(1000)
-
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "How to Pair Program [Text]" } ])
-                await sleep(1000)
-
-                if (this.condition === 1) {
-                    await this.send([
-                        {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role and ${this.participantNames[1]} has been assigned the "Navigator" role.`}
-                    ])}
-
-                let conn = await getConnection()
-                const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
-                await this.send([
-                    {type: "text", value: "Now that we are all here, let's decide what problem to work on."},
-                    {type: "choices", value: questions.map((q:any) => q.title)}
-                ])
-                this.introductionFlag = true
-                conn.release()
-            }
         }
     }
 
@@ -468,40 +413,90 @@ export default class Bruno {
         }
         console.log(`User made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
 
-        const conn = await getConnection() 
-        const [testCase] = await makeQuery(conn, "SELECT * FROM TestCases LIMIT ?, 1", [choiceIndex])
+        if (this.state.stage === 1) {
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([
+                {type: "text", value: "Great. Here's some information on how to pair program effectively: " } ])
+            await sleep(1000)
 
-        if (testCase.length === 0) {
-            console.warn("Selected test case not found")
-        } else {
-            const author_map = testCase[0].starter_code.replace(/[^\n]/g, "?")
-            const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, question_id = ? WHERE id = ?", [testCase[0].starter_code, author_map, testCase[0].question_id, this.roomId])
-            if (room.affectedRows === 0) {
-                console.warn("Room not found!")
-            } else {
-                await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
-                await sendEventOfType(this.roomId, "question_update", "AI", {"question": testCase[0]})
-            }
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([
+                {type: "text", value: "Why Pair Programing? [Text]" } ])
+            await sleep(1000)
+
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([
+                {type: "text", value: "Learn Goals of Pair Programming [Text]" } ])
+            await sleep(1000)
+
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([
+                {type: "text", value: "How to Pair Program [Text]" } ])
+            await sleep(1000)
+
+            if (this.condition === 1) {
+                await this.send([
+                    {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. This role involves [explain role]. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. This role involves [explain role].`}
+                ])}
+
+            let conn = await getConnection()
+            const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+            await this.send([
+                {type: "text", value: "When you are ready, you can select the problem that you would like to work on."},
+                {type: "choices", value: questions.map((q:any) => q.title)}
+            ])
+            this.introductionFlag = true
+            conn.release()
+
+            this.state.stage = 2
+            await this.saveState()
+
         }
 
-        if (!this.periodicFunctionStarted && this.introductionFlag) {  // Introduction sequence is done and users have made their initial problem selection
+        else if (this.state.stage === 2) {
+            const conn = await getConnection() 
+            const [testCase] = await makeQuery(conn, "SELECT * FROM TestCases LIMIT ?, 1", [choiceIndex])
+
+            if (testCase.length === 0) {
+                console.warn("Selected test case not found")
+            } else {
+                const author_map = testCase[0].starter_code.replace(/[^\n]/g, "?")
+                const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, question_id = ? WHERE id = ?", [testCase[0].starter_code, author_map, testCase[0].question_id, this.roomId])
+                if (room.affectedRows === 0) {
+                    console.warn("Room not found!")
+                } else {
+                    await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
+                    await sendEventOfType(this.roomId, "question_update", "AI", {"question": testCase[0]})
+                }
+            }
+
             this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 5 * 60 * 1000)
             this.brunoMessages.push({
                 role: "system",
-                content:
-                "The students have selected the problem they want to work on and are ready to begin. Inform them that they may begin working on their selected problem. Do not greet them."
+                content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
             });
 
             //INTERVENTION SPECIFIC
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: "The students have selected the problem they want to work on and are ready to begin. Inform them that they may begin working on their selected problem. Do not greet them.",
+                content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
             });
-            await this.gpt()
+            // await this.gpt()
             this.periodicFunctionStarted = true
-        }
-        
-        conn.release()
+
+            this.state.stage = 3
+            await this.saveState()
+            conn.release()
+
+        }    
     }
 
     /**
@@ -509,6 +504,13 @@ export default class Bruno {
      */
     async onRoomClose() {
         console.log(`Destroying Bruno for room ${this.roomId}`)
+    }
+
+    /** Save current state to database. */
+    async saveState() {
+        const conn = await getConnection()
+        await makeQuery(conn, "UPDATE Rooms SET bruno_state = ? WHERE id = ?", [JSON.stringify(this.state), this.roomId])
+        conn.release()
     }
 }
 

@@ -41,3 +41,7 @@ export interface Snapshot {
     author_map: string
     question_id: string
 }
+
+export interface BrunoState {
+    stage: number
+}
