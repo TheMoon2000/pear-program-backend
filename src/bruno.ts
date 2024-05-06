@@ -91,7 +91,7 @@ export default class Bruno {
         var chunkSize = 10
 
         //If code history longer than designated chunkSize
-        if (codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
+        if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
             var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
 
             var numNewLines = code.match(/\n/g)?.length || -1
