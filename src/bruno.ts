@@ -422,21 +422,21 @@ export default class Bruno {
             await sleep(1000)
 
             await this.sendTypingStatus(true)
-            await sleep(1000)
+            await sleep(10000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "Why Pair Programing? [Text]" } ])
             await sleep(1000)
 
             await this.sendTypingStatus(true)
-            await sleep(1000)
+            await sleep(10000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "Learn Goals of Pair Programming [Text]" } ])
             await sleep(1000)
 
             await this.sendTypingStatus(true)
-            await sleep(1000)
+            await sleep(10000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "How to Pair Program [Text]" } ])
