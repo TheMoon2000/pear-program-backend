@@ -70,6 +70,31 @@ roomRouter.post("/participations", async (req, res) => {
     }
 })
 
+roomRouter.get("/recent-activity", async (req, res) => {
+    const email = req.query.email
+    if (typeof email !== "string") {
+        return res.
+        status(400).send("Must provide `email` as string in params.")
+    }
+
+    const conn = await getConnection();
+    try {
+        const [history] = await makeQuery(conn, `
+            SELECT p1.room_id, p1.last_visited, Users.name as partner FROM Participants p1
+            LEFT JOIN Participants p2 ON p1.room_id = p2.room_id AND p1.user_email != p2.user_email
+            LEFT JOIN Users ON Users.email = p2.user_email
+            WHERE p1.user_email = ? AND DATE_ADD(p1.last_visited, INTERVAL 1 DAY) > NOW()`, [email])
+
+        res.json({
+            history: history
+        })
+    } catch (err) {
+        console.warn(err)
+        res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
+    }
+})
 
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
@@ -78,11 +103,13 @@ roomRouter.get("/:room_id", async(req, res) => {
     try {
         // Get room information
         const [room] = await makeQuery(conn, 
-            "SELECT Rooms.*, test_cases FROM Rooms LEFT JOIN TestCases ON TestCases.question_id = Rooms.question_id WHERE id = ?", 
+            "SELECT Rooms.*, test_cases, use_graphics FROM Rooms LEFT JOIN TestCases ON TestCases.question_id = Rooms.question_id WHERE id = ?", 
             [req.params.room_id])
         if (room.length === 0) {
             return res.status(404).send("Did not find the room with the given id")
         }
+
+        room[0].use_graphics = room[0].use_graphics > 0
 
         const rustpadHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}`)
         const authorHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}-authors`)
@@ -112,14 +139,14 @@ roomRouter.get("/:room_id", async(req, res) => {
 
 
         const [selfParticipant] = await makeQuery(conn, 
-            "SELECT dyte_participant_id AS participant_id, dyte_token FROM Participants WHERE room_id = ? AND user_email = ?", 
+            "SELECT dyte_participant_id AS participant_id, dyte_token, role FROM Participants WHERE room_id = ? AND user_email = ?", 
             [req.params.room_id, email])
         if (selfParticipant.length === 0) {
             selfParticipant.push({ participant_id: null, user_token: null})
         }
 
         const [allParticipants] = await makeQuery(conn,
-            `SELECT p.dyte_participant_id AS participant_id, u.name FROM Participants p LEFT JOIN Users u ON p.user_email = u.email
+            `SELECT p.dyte_participant_id AS participant_id, u.name, role FROM Participants p LEFT JOIN Users u ON p.user_email = u.email
             WHERE room_id = ? ORDER BY joined_date`,
             [req.params.room_id])
         
@@ -128,7 +155,9 @@ roomRouter.get("/:room_id", async(req, res) => {
             if (selfParticipant[0]?.participant_id === item.participant_id) {
                 selfParticipant[0].index = i
             }
-        })        
+        })   
+        
+        makeQuery(conn, "UPDATE Participants SET last_visited = NOW() WHERE room_id = ? AND user_email = ?", [req.params.room_id, email])
         
         res.status(200).json({
             room: room[0],
@@ -140,7 +169,8 @@ roomRouter.get("/:room_id", async(req, res) => {
                 meeting_id: room[0].dyte_meeting_id,
                 all_participants: allParticipants,
                 participant_id: selfParticipant[0]?.participant_id,
-                user_token: selfParticipant[0]?.dyte_token
+                user_token: selfParticipant[0]?.dyte_token,
+                role: selfParticipant[0]?.role
             }
         })
         } catch (error) {
@@ -259,6 +289,9 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
     if (typeof req.body?.email !== "string") {
         return res.status(400).send("Must provide `email` in body.")
     }
+
+    const showWelcomeMessage = Boolean(req.body?.show_welcome_message)
+
     let conn: PoolConnection | undefined
 
     try {
@@ -280,7 +313,7 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
 
             const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
             
-            await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name })
+            await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name, show_welcome_message: showWelcomeMessage })
             return res.json({ "terminal_id": newTerminal.name })
             // return res.status(400).send("Server already started")
         }
@@ -303,7 +336,7 @@ roomRouter.post("/:room_id/create-server", async (req, res) => {
 
         const terminalResponse = await serverInstance.post(`/${sessionId}/api/terminals`, undefined, { headers: { "Authorization": `token ${userToken}` } }).then(r => r.data)
 
-        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: terminalResponse.name })
+        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: terminalResponse.name, show_welcome_message: showWelcomeMessage })
 
         res.json({ "token": userToken, "terminal_id": terminalResponse.name })
     } catch (error) {
@@ -361,7 +394,7 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
 
         const newTerminal = await serverInstance.post(`/${req.params.room_id}/api/terminals`, undefined, { headers: authHeader }).then(r => r.data)
 
-        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name })
+        await sendEventOfType(req.params.room_id, "terminal_started", req.body.email, { terminal_id: newTerminal.name, show_welcome_message: true })
 
         res.json({
             user: userData,
@@ -399,11 +432,14 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         [req.params.room_id, req.body.file, req.body.author_map, question_id])
 
         // Update code on server
-        await serverInstance.put(`/${req.params.room_id}/api/contents/main.py`, {
-            type: "file",
-            format: "text",
-            content: req.body.file
-        }, { headers: authHeader })
+        // await serverInstance.put(`/${req.params.room_id}/api/contents/main.py`, {
+        //     type: "file",
+        //     format: "text",
+        //     content: req.body.file
+        // }, { headers: authHeader })
+        const command = `docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`
+        await execAsync(command)
+        console.log(command)
 
         await conn.commit()
         
@@ -470,7 +506,7 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
     const conn = await getConnection()
     try {
         await makeQuery(conn, "UPDATE Rooms SET test_results = ? WHERE id = ?", [JSON.stringify(req.body.test_results), req.params.room_id])
-        await sendEventOfType(req.params.room_id, "autograder_update", req.body.email, req.body.test_results)
+        await sendEventOfType(req.params.room_id, "autograder_update", req.body.email, { results: req.body.test_results })
         res.send()
     } catch (error) {
         console.log(error)
@@ -542,6 +578,50 @@ roomRouter.post("/:room_id/heartbeat", async (req,res) =>{
         }
 
         res.status(200).send("Heartbeat received")
+    } catch {
+        res.status(500).send("Internal server error")
+    } finally {
+        conn.release()
+    }
+})
+
+roomRouter.post("/:room_id/switch-roles", async (req, res) => {
+    const currentRole = req.body?.role
+    const email = req.body?.email
+    if (typeof currentRole !== "number") {
+        return res.status(400).send("Must provide `role` as number in body.")
+    }
+    if (typeof email !== "string") {
+        return res.status(400).send("Must provide `email` as string in body.")
+    }
+    
+    if (currentRole !== 1 && currentRole !== 2) {
+        return res.status(400).send("Cannot switch role before receiving a initial role assignment.")
+    }
+
+    const otherRole = 3 - currentRole
+
+    const conn = await getConnection();
+    try {
+        // Check room exists
+        const [roomInfo] = await makeQuery(conn, "SELECT id FROM Rooms WHERE id = ?", [req.params.room_id])
+        if (roomInfo.length === 0) {
+            console.log(req.params.room_id, roomInfo)
+            return res.status(404).send()
+        }
+
+        // Update self role
+        await makeQuery(conn, "UPDATE Participants SET role = ? WHERE room_id = ? AND user_email = ?", [otherRole, req.params.room_id, email])
+
+        // Update partner role
+        await makeQuery(conn, "UPDATE Participants SET role = ? WHERE room_id = ? AND user_email != ?", [currentRole, req.params.room_id, email])
+
+        const [newRoles] = await makeQuery(conn, "SELECT user_email, role FROM Participants WHERE room_id = ?", [req.params.room_id])
+
+        res.json({
+            role: otherRole
+        })
+        await sendEventOfType(req.params.room_id, "update_role", email, { roles: Object.fromEntries(newRoles.map((p: any) => [p.user_email, p.role])) })
     } catch {
         res.status(500).send("Internal server error")
     } finally {

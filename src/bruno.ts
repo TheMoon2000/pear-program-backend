@@ -314,7 +314,7 @@ export default class Bruno {
             if (this.state.stage === 0) {
                 // Arbitrarily set participant 1 to role 1 and participant 2 to role 2
                 let conn = await getConnection()
-                await makeQuery(conn, "UPDATE Participants SET role = 1      WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
+                await makeQuery(conn, "UPDATE Participants SET role = 1 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
                 await makeQuery(conn, "UPDATE Participants SET role = 2 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[1].email])
 
                 this.participantNames[0] = participants[0].name
