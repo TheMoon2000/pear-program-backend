@@ -6,7 +6,7 @@ import semaphore, { Semaphore } from "semaphore";
 import Bruno from "./bruno";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
+export const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
 async function sql(query: string, params?: any[]) {
@@ -130,7 +130,7 @@ chatServer.on("connection", (ws, request) => {
             if (action === "start_typing" || action === "stop_typing") {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     if (roomWs !== ws) {
-                        return roomWs.send(JSON.stringify({ sender: email, name: identityMap.get(roomWs)?.name, event: action }))
+                        return roomWs.send(JSON.stringify({ sender: email, name: identityMap.get(ws)?.name, event: action }))
                     }
                 })
             } else if (action === "send_text") {
@@ -185,7 +185,7 @@ chatServer.on("connection", (ws, request) => {
                     })
                 })
                 roomInfo.ai.onChatHistoryUpdated(history, "make_choice", {messageId, contentIndex, choiceIndex})
-                roomInfo.ai.onUserMakesChoice(messageId, contentIndex, choiceIndex)
+                roomInfo.ai.onUserMakesChoice(messageId, contentIndex, choiceIndex, email)
             } else {
                 return ws.close(4000, `Action '${action}' is unrecognized.`)
             }

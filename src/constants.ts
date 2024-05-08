@@ -44,4 +44,5 @@ export interface Snapshot {
 
 export interface BrunoState {
     stage: number
+    solvedQuestionIds: string[]
 }

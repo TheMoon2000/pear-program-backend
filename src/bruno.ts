@@ -32,19 +32,11 @@ export default class Bruno {
       });
     
     private brunoMessages: ChatCompletionMessageParam[] = []
-    
     private interventionSpecificMessages: ChatCompletionMessageParam[] = [];
-
     private participantData: ParticipantInfo[] = [];
-
     private bothParticipantsJoined: boolean
-
     private bothParticipantsOnline: boolean
-
     private introductionFlag: boolean
-
-    private participantNames: string[] = []
-
     private periodicFunctionStarted: boolean
 
     private state: BrunoState
@@ -80,7 +72,7 @@ export default class Bruno {
         this.introductionFlag = false
         this.periodicFunctionStarted = false
 
-        this.state = savedState ?? {stage: 0}
+        this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
 
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
@@ -317,13 +309,9 @@ export default class Bruno {
                 await makeQuery(conn, "UPDATE Participants SET role = 1 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
                 await makeQuery(conn, "UPDATE Participants SET role = 2 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[1].email])
 
-                this.participantNames[0] = participants[0].name
-                this.participantNames[1] = participants[1].name
-
                 this.brunoMessages.push({
                     role: "system",
                     content: `Both students are in the session. Student A's name is ${participants[0].name}. Student B's name is ${participants[1].name}.`,
-
                 });
 
                 //INTERVENTION SPECIFIC
@@ -406,12 +394,12 @@ export default class Bruno {
         }
     }
 
-    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number) {
+    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number, email: string) {
         const section = this.currentChatHistory[messageId].content?.[contentIndex]
         if (section) {
             section.choice_index = choiceIndex
         }
-        console.log(`User made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
+        console.log(`User ${email} made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
 
         if (this.state.stage === 1) {
             await this.sendTypingStatus(true)
@@ -444,8 +432,13 @@ export default class Bruno {
 
             if (this.condition === 1) {
                 await this.send([
-                    {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. This role involves [explain role]. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. This role involves [explain role].`}
+                    {type: "text", value: `${this.participantData[0].name} has been assigned the "Driver" role. This role involves [explain role]. \n\n${this.participantData[1].name} has been assigned the "Navigator" role. This role involves [explain role].`}
                 ])}
+
+                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+                    [this.participantData[0].email]: 1,
+                    [this.participantData[1].email]: 2
+                } })
 
             let conn = await getConnection()
             const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
@@ -474,7 +467,8 @@ export default class Bruno {
                     console.warn("Room not found!")
                 } else {
                     await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
-                    await sendEventOfType(this.roomId, "question_update", "AI", {"question": testCase[0]})
+                    const otherUser = this.participantData.filter(p => p.email != email)[0]
+                    await sendEventOfType(this.roomId, "question_update", otherUser.email, {"question": testCase[0]})
                 }
             }
 
@@ -497,6 +491,29 @@ export default class Bruno {
             conn.release()
 
         }    
+    }
+
+    async onQuestionPassed(questionId: string, questionTitle: string, testResults: any[]) {
+        console.log('passed', questionId, testResults)
+        if (!this.state.solvedQuestionIds.includes(questionId)) {
+            this.state.solvedQuestionIds.push(questionId)
+        
+            await this.send([{
+                type: "text",
+                value: `Congrats for solving ${questionTitle}! I hope that you enjoyed this coding session.`
+            }])
+            await this.saveState()
+            await sleep(3000)
+            await this.send([{
+                type: "text",
+                value: "Please take a few minutes to share your feedback regarding your coding experience at [google form link]."
+            }])
+            await sleep(3000)
+            await this.send([{
+                type: "text",
+                value: "If you are interested in working on more problems, you can select a different problem by clicking the **Switch Coding Problem** button."
+            }])
+        }
     }
 
     /**

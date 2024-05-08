@@ -6,7 +6,7 @@ import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
-import { sendNotificationToRoom, sendEventOfType } from "../chat";
+import { sendNotificationToRoom, sendEventOfType, socketMap } from "../chat";
 
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
@@ -256,7 +256,9 @@ roomRouter.post("/", async (req, res) => {
         const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
         const meetingId = createMeetingResponse.data.id
 
-        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token, `condition`) VALUES (?, '', '', ?, ?, ?)", [sessionId, meetingId, userToken, condition])
+        const initialCode = `print("Hello world!")`
+        const initialAuthorMap = initialCode.replace(/[^\n]/g, "?")
+        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token, `condition`) VALUES (?, ?, ?, ?, ?, ?)", [sessionId, initialCode, initialAuthorMap, meetingId, userToken, condition])
 
         // Insert participant into dyte meeting
         const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
@@ -405,6 +407,10 @@ roomRouter.post("/:room_id/restart-server", async (req, res) => {
     }
 })
 
+function escapeCmd(cmd: string) {
+    return '"'+cmd.replace(/(["'$`\\])/g,'\\$1')+'"';
+};
+
 roomRouter.post("/:room_id/code", async (req, res) => {
     if (typeof req.body?.file !== "string" || typeof req.body?.author_map !== "string") {
         return res.status(400).send("Must contain `file` and `author_map` in request body")
@@ -437,7 +443,8 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         //     format: "text",
         //     content: req.body.file
         // }, { headers: authHeader })
-        const command = `docker exec -u ${req.params.room_id} env bash -c 'echo -e ${JSON.stringify(req.body.file)} > /home/${req.params.room_id}/main.py'`
+        const originalCode = JSON.stringify(req.body.file).replace(/\$/g, '\\$')
+        const command = `docker exec -u ${req.params.room_id} env bash -c "echo -e '${originalCode.slice(1, originalCode.length - 1).replace(/'/g, "'\\''")}' > /home/${req.params.room_id}/main.py"`
         await execAsync(command)
         console.log(command)
 
@@ -505,6 +512,23 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
 
     const conn = await getConnection()
     try {
+        const [currentQuestion] = await makeQuery(conn, "SELECT Rooms.question_id, TestCases.title FROM Rooms INNER JOIN TestCases ON Rooms.question_id = TestCases.question_id WHERE id = ?", [req.params.room_id])
+        
+        if (currentQuestion.length === 0) {
+            return res.status(404).send("Room not found")
+        }
+
+        let isCorrect = true
+        req.body.test_results.forEach((r: any) => {
+            if (!r.isCorrect) {
+                isCorrect = false
+            }
+        })
+
+        if (isCorrect && req.body.test_results.length !== 0) {
+            socketMap.get(req.params.room_id)?.ai.onQuestionPassed(currentQuestion[0].question_id, currentQuestion[0].title, req.body.test_results)
+        }
+
         await makeQuery(conn, "UPDATE Rooms SET test_results = ? WHERE id = ?", [JSON.stringify(req.body.test_results), req.params.room_id])
         await sendEventOfType(req.params.room_id, "autograder_update", req.body.email, { results: req.body.test_results })
         res.send()
