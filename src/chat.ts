@@ -26,7 +26,7 @@ chatServer.on("connection", (ws, request) => {
     }
 
     const chatHistoryPromise = new Promise<Bruno>((r, _) => {
-        sql("SELECT chat_history, `condition`, bruno_state FROM Rooms WHERE id = ?", [roomId]).then((room => {
+        sql("SELECT chat_history, `condition`, bruno_state, dyte_meeting_id FROM Rooms WHERE id = ?", [roomId]).then((room => {
             if (room.length === 0) {
                 return ws.close(4004, "Did not find room id")
             }
@@ -68,7 +68,7 @@ chatServer.on("connection", (ws, request) => {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
                 })
-            }, brunoState)
+            }, room[0].dyte_meeting_id, brunoState)
 
             if (!socketMap.has(roomId)) {
                 socketMap.set(roomId, {

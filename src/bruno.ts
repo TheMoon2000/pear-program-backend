@@ -1,9 +1,11 @@
+import axios from "axios";
 import { sendEventOfType, sendNotificationToRoom } from "./chat"
 import { ChatMessage, ChatMessageSection, ParticipantInfo, BrunoState } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
 import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
+import { parse } from "csv-parse/sync";
 
 /* To Do Summary:
  + Implement Switching Roles Functionality in Turn Taking Intervention (Either GPT or Hard-Code)
@@ -13,6 +15,8 @@ import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
  + Switch all internal variables to dictionary state to send to Jerry
  + (Future) Calculate Conversation Data Metrics
 */
+
+const dyteInstance = axios.create({ baseURL: "https://api.dyte.io/v2", headers: { Authorization: `Basic ${process.env.DYTE_AUTH}`} })
 
 export default class Bruno {
     readonly roomId: string
@@ -39,6 +43,8 @@ export default class Bruno {
     private introductionFlag: boolean
     private periodicFunctionStarted: boolean
 
+    private dyteMeetingId: string
+
     private state: BrunoState
 
     private initialPrompt =
@@ -57,7 +63,7 @@ export default class Bruno {
      * @param roomId The ID of the room.
      * @param send An asynchronous function for sending messages as Bruno into the room.
      */
-    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, savedState?: BrunoState) {
+    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, dyteMeetingId: string, savedState?: BrunoState) {
         this.roomId = roomId
         this.condition = condition
         this.send = send
@@ -73,7 +79,7 @@ export default class Bruno {
         this.periodicFunctionStarted = false
 
         this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
-
+        this.dyteMeetingId = dyteMeetingId
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
 
@@ -417,14 +423,14 @@ export default class Bruno {
             await sleep(1000)
 
             await this.sendTypingStatus(true)
-            await sleep(10000)
+            await sleep(5000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "Learn Goals of Pair Programming [Text]" } ])
             await sleep(1000)
 
             await this.sendTypingStatus(true)
-            await sleep(10000)
+            await sleep(5000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "How to Pair Program [Text]" } ])
@@ -469,6 +475,12 @@ export default class Bruno {
                     await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
                     const otherUser = this.participantData.filter(p => p.email != email)[0]
                     await sendEventOfType(this.roomId, "question_update", otherUser.email, {"question": testCase[0]})
+                    await this.send([
+                        {
+                            type: "text",
+                            value: testCase[0].description
+                        }
+                    ])
                 }
             }
 
@@ -528,6 +540,22 @@ export default class Bruno {
         const conn = await getConnection()
         await makeQuery(conn, "UPDATE Rooms SET bruno_state = ? WHERE id = ?", [JSON.stringify(this.state), this.roomId])
         conn.release()
+    }
+
+    // Failable. Need to be catched.
+    async fetchTranscript() {
+        const { transcript_download_url } = (await dyteInstance.get(`/meetings/${this.dyteMeetingId}/active-transcript`)).data.data
+
+        if (transcript_download_url) {
+            const csv = await axios.get(transcript_download_url).then(r => r.data) // should be a string
+            const transcript = (parse(csv, { skip_empty_lines: true }) as string[][]).map((item: any) => {
+                return { timestamp: Number(item[0]), name: item[4] as string, speech: item[5] as string }
+            })
+            return transcript
+        } else {
+            console.warn(`Transcript not available for room ${this.roomId}`)
+            return null
+        }
     }
 }
 

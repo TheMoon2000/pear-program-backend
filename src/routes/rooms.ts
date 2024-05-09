@@ -207,7 +207,7 @@ roomRouter.post("/", async (req, res) => {
 
             // Edge case: check if current participant is already in the room
             const [currentParticipants] = await makeQuery(conn, "SELECT * FROM Participants WHERE room_id = ? AND user_email = ?", [mostRecentRoom[0].id, userEmail])
-            if (currentParticipants.length > 0) { // user must be already be waiting in a room, get them there
+            if (currentParticipants.length === 1) { // user must be already be waiting in a room, get them there
 
                 return res.json({
                     room_id: mostRecentRoom[0].id,
@@ -561,6 +561,13 @@ roomRouter.patch("/:room_id", async (req, res) => {
         if (room.affectedRows === 0) {
             return res.status(404).send("Room id not found.")
         }
+
+        socketMap.get(req.params.room_id)?.ai.send([
+            {
+                type: "text",
+                value: testCases[0].description
+            }
+        ])
 
         await makeQuery(conn, "INSERT INTO Snapshots (room_id, code, author_map, question_id) VALUES (?, ?, ?, ?)",
                     [req.params.room_id, testCases[0].starter_code, author_map, req.body.question_id])
