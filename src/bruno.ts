@@ -230,7 +230,7 @@ export default class Bruno {
 
     async getConversationContribution(): Promise<[string, string]> {
         // harcode something
-        
+
         //await fetchTranscript()
         return ["80","20"]
     }
@@ -403,10 +403,16 @@ export default class Bruno {
             if (studentName !== ""){
                 await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
                 // this.brunoMessages.push({role: "system", content: studentName + " is currently offline. There is currently one student remaining in the room"})
+                
+                // await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
+                // await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
+                // await sendEventOfType(this.roomId, "participant_update", "AI", {"choices": ["Join New Coding Session [Currently Non-Functional]"]})
+
                 await this.send([
                     {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
                     {type: "choices", value: ["Join New Coding Session [Currently Non-Functional]"]}
                 ])
+                
                 // TODO: pause periodic function instead of clearing?
                 this.bothParticipantsOnline = false
                 clearInterval(this.periodicFunctionInstance)
