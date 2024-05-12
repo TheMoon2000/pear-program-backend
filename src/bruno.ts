@@ -31,24 +31,25 @@ export default class Bruno {
           process.env.OPENAI_API_KEY
       });
     
-    private brunoMessages: ChatCompletionMessageParam[] = []
+    // private brunoMessages: ChatCompletionMessageParam[] = []
     
     private interventionSpecificMessages: ChatCompletionMessageParam[] = [];
 
     private participantData: ParticipantInfo[] = [];
 
-    private bothParticipantsJoined: boolean
+    // private bothParticipantsJoined: boolean
 
     private bothParticipantsOnline: boolean
 
-    private introductionFlag: boolean
+    // private introductionFlag: boolean
 
     private participantNames: string[] = []
 
-    private periodicFunctionStarted: boolean
+    // private periodicFunctionStarted: boolean
 
     private state: BrunoState
 
+    // number of students in prompt
     private initialPrompt =
       "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
           \
@@ -56,7 +57,7 @@ export default class Bruno {
           \
           The Code in Place software will provide you similar tags. Only assess the students once you have received these tagged messages. \n \
           \
-          There are currently 0 students in the coding environment. You will be notified once one (or both) students have joined. \n \
+          The students have selected the problem they want to work on and have begun coding. Do not greet them. \n \
           \
           Do not number or label your messages. Do not break character or mention that you are an AI Language Model.";
   
@@ -71,14 +72,14 @@ export default class Bruno {
         this.send = send
         this.sendTypingStatus = sendTypingStatus
         this.currentChatHistory = chatHistory
-        this.brunoMessages = [{role: "system", content: this.initialPrompt}]  // Modify later to account for room restored from existing session
+        // this.brunoMessages = [{role: "system", content: this.initialPrompt}]  // Modify later to account for room restored from existing session
         this.interventionSpecificMessages = [
             { role: "system", content: this.initialPrompt },
           ];
-        this.bothParticipantsJoined = false  // True when both participants join for the first time
+        // this.bothParticipantsJoined = false  // True when both participants join for the first time
         this.bothParticipantsOnline = false
-        this.introductionFlag = false
-        this.periodicFunctionStarted = false
+        // this.introductionFlag = false
+        // this.periodicFunctionStarted = false
 
         this.state = savedState ?? {stage: 0}
 
@@ -108,6 +109,7 @@ export default class Bruno {
 
             var chunkNotFound = true
             var chunkWriter = ""
+            var nonChunkWriter = ""
 
 
             // TO DO: Will repeat the same chunk, need to remember which chunks have already been looked at
@@ -115,10 +117,12 @@ export default class Bruno {
                 var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
                 if (parseFloat(codePercentages[0]) >= 70) {
                     chunkWriter = participants[0].name
+                    nonChunkWriter = participants[1].name
                     chunkNotFound = false
                 }
                 else if (parseFloat(codePercentages[1]) >= 70) {
                     chunkWriter = participants[1].name
+                    nonChunkWriter = participants[0].name
                     chunkNotFound = false
                 } else {
                     firstNewLine = firstNewLine + 1
@@ -126,18 +130,30 @@ export default class Bruno {
                 }
             }
             
-            this.interventionSpecificMessages.push({
-                role: "system",
-                content: `There is a large chunk of code from lines ${firstNewLine} to ${lastNewLine} written predominantly by ${chunkWriter}. Encourage ${chunkWriter} to explain those specific lines of code to their partner. 
-                        Follow-up with the partner to ensure that they understand`,
-            });
-            // await this.gpt();
-            await this.gptLimitedContext();
-            this.interventionSpecificMessages.pop();
+            if(!chunkNotFound) {
+                // Check if follow-up works
+                this.interventionSpecificMessages.push({
+                    role: "system",
+                    content: `There is a large chunk of code from lines ${firstNewLine} to ${lastNewLine} written predominantly by ${chunkWriter}. Have ${nonChunkWriter} demonstrate their understanding of the code that ${chunkWriter} wrote
+                            by explaining those specific lines of code to their partner.`,
+                });
+                // await this.gpt();
+                await this.gptLimitedContext();
+                this.interventionSpecificMessages.pop();
+
+
+                await this.sendTypingStatus(true);
+                await sleep(1000);
+                await this.sendTypingStatus(false);
+                await this.send([
+                    {type: "text", value: `${chunkWriter}, was ${nonChunkWriter}'s explanation correct? If not, please help ${nonChunkWriter} understand each line of the code.`,            }
+                ])
+            }
+            
         }
     }
 
-    // Implement switch roles functionality
+    // Students switch on their own -- remind them to switch if they haven't switched in the past 10
     async turnTakingIntervention(participants: ParticipantInfo[]){     
         var talkPercentages = await this.getConversationContribution()
         var aTalkPercentage = talkPercentages[0];
@@ -150,13 +166,13 @@ export default class Bruno {
         var role1Goal = " should be writing the majority of the code and contributing less to the conversations. "
         var role2Goal = " should verbally contribute to the majority of the conversation and contribute less to writing the code. "
         var role1, role2 = ""
-        if (participants[0].role == 0) {
+        if (participants[0].role == 1) {
             role1 = "[DRIVER]"
             role2 = "[NAVIGATOR]"
         }
         else {
-            role1 = "[DRIVER]"
-            role2 = "[NAVIGATOR]"
+            role2 = "[DRIVER]"
+            role1 = "[NAVIGATOR]"
             var temp = role2Goal
             role2Goal = role1Goal
             role1Goal = temp
@@ -168,6 +184,8 @@ export default class Bruno {
                     Because ${participants[1].name} has the ${role2} role, ${participants[1].name} ${role2Goal}
                     Evaluate ${participants[0].name} and ${participants[1].name} based on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned. If they have properly fulfilled their roles, praise the students.",`,
           });
+
+          //remove switching roles / hardcode
           this.interventionSpecificMessages.push({
             role: "system",
             content: `New metric data. Remember, the students should switch roles IF AND ONLY IF they have properly fulfilled their currently assigned roles. 
@@ -178,6 +196,8 @@ export default class Bruno {
                       \n[METRIC] ${participants[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
           });
           // await this.gpt();
+
+          // Check if Jerry is doing role switching
           await this.gptLimitedContext();
           this.interventionSpecificMessages.pop();
           this.interventionSpecificMessages.pop();
@@ -205,10 +225,13 @@ export default class Bruno {
           // await this.gpt();
           await this.gptLimitedContext();
           this.interventionSpecificMessages.pop;
+          this.interventionSpecificMessages.pop;
     }
 
     async getConversationContribution(): Promise<[string, string]> {
         // harcode something
+        
+        //await fetchTranscript()
         return ["80","20"]
     }
 
@@ -243,13 +266,14 @@ export default class Bruno {
         model: "gpt-3.5-turbo",
         });
 
-        //Maybe Delete
-        this.brunoMessages.push({
-        role: "system",
-        content:
-            "You have been provided metrics and were asked to evaluate the students. The following response is your analysis:",
-        });
-        this.brunoMessages.push(completion.choices[0].message);
+        // Maybe Delete
+
+        // this.brunoMessages.push({
+        // role: "system",
+        // content:
+        //     "You have been provided metrics and were asked to evaluate the students. The following response is your analysis:",
+        // });
+        // this.brunoMessages.push(completion.choices[0].message);
 
         await this.sendTypingStatus(true);
         await sleep(1000);
@@ -261,51 +285,43 @@ export default class Bruno {
 
 
     //TO DO: Fix try/catch to account for rate limit issue (exponential backoff)
-    async gpt() {
-        try {
-            const completion = await this.openai.chat.completions.create({
-                messages: this.brunoMessages,
-                model: "gpt-3.5-turbo",
-            });
+    // async gpt() {
+    //     try {
+    //         const completion = await this.openai.chat.completions.create({
+    //             messages: this.brunoMessages,
+    //             model: "gpt-3.5-turbo",
+    //         });
 
-            this.brunoMessages.push(completion.choices[0].message);
+    //         this.brunoMessages.push(completion.choices[0].message);
 
-            await this.sendTypingStatus(true)
-            await sleep(1000)
-            await this.sendTypingStatus(false)
-            await this.send([
-                {type: "text", value: completion.choices[0].message.content || ""}
-            ])
-        }
-        catch{
+    //         await this.sendTypingStatus(true)
+    //         await sleep(1000)
+    //         await this.sendTypingStatus(false)
+    //         await this.send([
+    //             {type: "text", value: completion.choices[0].message.content || ""}
+    //         ])
+    //     }
+    //     catch{
 
-        }
-}
+    //     }
+    // }
 
+
+    //If someone refreshes before "take a moment to introduce yourself" is done
     async onParticipantsUpdated(participants: ParticipantInfo[]) {
         console.log(`Room ${this.roomId} received updated participant list`, participants)
         console.log("Current chat history length:", this.currentChatHistory.length)
 
         this.participantData = JSON.parse(JSON.stringify(participants));
 
-        // NEED TO FIGURE THIS OUT
         if (participants.length === 1 && this.currentChatHistory.filter(m => m.sender !== "system").length === 0) {
-            const currentParticipant = participants[0]
+            // const currentParticipant = participants[0]
             await this.sendTypingStatus(true)
             await sleep(1000)
             await this.sendTypingStatus(false)
 
-            // TODO: Add Bruno Here
             await this.send([
-                {type: "text", value: "We are still waiting for one more person to join the session. In the meantime, let's get you set up."}
-            ])
-            await sleep(1000)
-
-            await this.sendTypingStatus(true)
-            await sleep(1000)
-            await this.sendTypingStatus(false)
-            await this.send([
-                {type: "text", value: "Remember to allow video and audio access. \n\nThe \"Show Video\" button will allow you to see your partner once they join. \n\nThe session will begin once another participant joins the room."}
+                {type: "text", value: "We are still waiting for one more person to join the session."}
             ])
             await sleep(1000)
         }
@@ -314,17 +330,18 @@ export default class Bruno {
             if (this.state.stage === 0) {
                 // Arbitrarily set participant 1 to role 1 and participant 2 to role 2
                 let conn = await getConnection()
-                await makeQuery(conn, "UPDATE Participants SET role = 1      WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
+                await makeQuery(conn, "UPDATE Participants SET role = 1 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
                 await makeQuery(conn, "UPDATE Participants SET role = 2 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[1].email])
+                conn.release()
 
                 this.participantNames[0] = participants[0].name
                 this.participantNames[1] = participants[1].name
 
-                this.brunoMessages.push({
-                    role: "system",
-                    content: `Both students are in the session. Student A's name is ${participants[0].name}. Student B's name is ${participants[1].name}.`,
+                // this.brunoMessages.push({
+                //     role: "system",
+                //     content: `Both students are in the session. Student A's name is ${participants[0].name}. Student B's name is ${participants[1].name}.`,
 
-                });
+                // });
 
                 //INTERVENTION SPECIFIC
                 this.interventionSpecificMessages.push({
@@ -338,16 +355,30 @@ export default class Bruno {
                 await this.send([
                     {type: "text", value: "Hi, I'm Bruno your pair programming facillitator. I'm here to help you get the most out of this session."}
                 ])
+                await sleep(3000)
+
+                
+                await this.sendTypingStatus(true)
                 await sleep(1000)
+                await this.sendTypingStatus(false)
+                await this.send([
+                    {type: "text", value: "Please allow video and audio access so you can communicate with your partner." } ])
+                await sleep(3000)
+
+                await this.sendTypingStatus(true)
+                await sleep(1000)
+                await this.sendTypingStatus(false)
+                await this.send([
+                    {type: "text", value: "You can change your video settings by clicking the Expand Video button in the top left." } ])
+                await sleep(3000)
 
                 await this.send([
                     {type: "text", value: "Before we begin, take a moment to introduce yourself to your partner. Let me know once you are done."},
                     {type: "choices", value: ["Ready"]}
                 ])
 
-                this.bothParticipantsJoined = true
+                // this.bothParticipantsJoined = true
                 this.bothParticipantsOnline = true
-                conn.release()
 
                 this.state.stage = 1
                 await this.saveState()
@@ -415,45 +446,39 @@ export default class Bruno {
 
         if (this.state.stage === 1) {
             await this.sendTypingStatus(true)
-            await sleep(1000)
+            await sleep(10000)
             await this.sendTypingStatus(false)
             await this.send([
-                {type: "text", value: "Great. Here's some information on how to pair program effectively: " } ])
-            await sleep(1000)
+                {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
+                                    \n\nResearch has shown that students who pair program have improved learning outcomes, gain confidence and enjoy programming more!" } ])
+            await sleep(5000)
 
             await this.sendTypingStatus(true)
             await sleep(10000)
             await this.sendTypingStatus(false)
             await this.send([
-                {type: "text", value: "Why Pair Programing? [Text]" } ])
-            await sleep(1000)
+                {type: "text", 
+                value: "Heres how to pair program: \n\n\
+                        There are two roles in pair programming: \n\n\
+                         - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
+                         - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
+                        **Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.\n\n\
+                        **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.\n\n\
+                        **Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.\n\n\
+                        Need more guidance? Check out this document [link]" } ])
+            await sleep(5000)
 
-            await this.sendTypingStatus(true)
-            await sleep(10000)
-            await this.sendTypingStatus(false)
             await this.send([
-                {type: "text", value: "Learn Goals of Pair Programming [Text]" } ])
-            await sleep(1000)
-
-            await this.sendTypingStatus(true)
-            await sleep(10000)
-            await this.sendTypingStatus(false)
-            await this.send([
-                {type: "text", value: "How to Pair Program [Text]" } ])
-            await sleep(1000)
-
-            if (this.condition === 1) {
-                await this.send([
-                    {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. This role involves [explain role]. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. This role involves [explain role].`}
-                ])}
+                    {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
+                ])
 
             let conn = await getConnection()
             const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
             await this.send([
-                {type: "text", value: "When you are ready, you can select the problem that you would like to work on."},
+                {type: "text", value: "Ok, let's pick a problem!"},
                 {type: "choices", value: questions.map((q:any) => q.title)}
             ])
-            this.introductionFlag = true
+            // this.introductionFlag = true
             conn.release()
 
             this.state.stage = 2
@@ -478,19 +503,26 @@ export default class Bruno {
                 }
             }
 
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 5 * 60 * 1000)
-            this.brunoMessages.push({
-                role: "system",
-                content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
-            });
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([{type: "text", value: "Press the Run Code button in the top right corner to execute your program." } ])
+
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+
+            // this.brunoMessages.push({
+            //     role: "system",
+            //     content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
+            // });
 
             //INTERVENTION SPECIFIC
-            this.interventionSpecificMessages.push({
-                role: "system",
-                content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
-            });
+            // this.interventionSpecificMessages.push({
+            //     role: "system",
+            //     content: "The students have selected the problem they want to work on and have begun coding. Do not greet them."
+            // });
             // await this.gpt()
-            this.periodicFunctionStarted = true
+
+            // this.periodicFunctionStarted = true
 
             this.state.stage = 3
             await this.saveState()

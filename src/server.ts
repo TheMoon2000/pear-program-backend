@@ -9,7 +9,7 @@ import { roomRouter } from "./routes/rooms";
 import { getConnection, makeQuery } from "./utils/database";
 
 const app = express()
-const port = 8012
+const port = 8011
 
 const corsOptions = {
     origin: "*"
