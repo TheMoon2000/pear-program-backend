@@ -246,7 +246,7 @@ export default class Bruno {
         }
         else {
             const codeHistory = await getCodeHistoryOfRoom(this.roomId)
-            if (codeHistory[codeHistory.length - 1].author_map.length > 0) {
+            if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > 0) {
                 var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?\n]/g, "")
             }
             else {
