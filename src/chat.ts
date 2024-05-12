@@ -6,7 +6,7 @@ import semaphore, { Semaphore } from "semaphore";
 import Bruno from "./bruno";
 
 const chatServer = new WebSocketServer({ port: 4011, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
+export const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
 async function sql(query: string, params?: any[]) {
@@ -26,7 +26,7 @@ chatServer.on("connection", (ws, request) => {
     }
 
     const chatHistoryPromise = new Promise<Bruno>((r, _) => {
-        sql("SELECT chat_history, `condition`, bruno_state FROM Rooms WHERE id = ?", [roomId]).then((room => {
+        sql("SELECT chat_history, `condition`, bruno_state, dyte_meeting_id FROM Rooms WHERE id = ?", [roomId]).then((room => {
             if (room.length === 0) {
                 return ws.close(4004, "Did not find room id")
             }
@@ -68,7 +68,7 @@ chatServer.on("connection", (ws, request) => {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
                 })
-            }, brunoState)
+            }, room[0].dyte_meeting_id, brunoState)
 
             if (!socketMap.has(roomId)) {
                 socketMap.set(roomId, {
@@ -130,7 +130,7 @@ chatServer.on("connection", (ws, request) => {
             if (action === "start_typing" || action === "stop_typing") {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     if (roomWs !== ws) {
-                        return roomWs.send(JSON.stringify({ sender: email, name: identityMap.get(roomWs)?.name, event: action }))
+                        return roomWs.send(JSON.stringify({ sender: email, name: identityMap.get(ws)?.name, event: action }))
                     }
                 })
             } else if (action === "send_text") {
@@ -185,7 +185,7 @@ chatServer.on("connection", (ws, request) => {
                     })
                 })
                 roomInfo.ai.onChatHistoryUpdated(history, "make_choice", {messageId, contentIndex, choiceIndex})
-                roomInfo.ai.onUserMakesChoice(messageId, contentIndex, choiceIndex)
+                roomInfo.ai.onUserMakesChoice(messageId, contentIndex, choiceIndex, email)
             } else {
                 return ws.close(4000, `Action '${action}' is unrecognized.`)
             }
@@ -259,7 +259,7 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
     return true
 }
 
-export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started", senderEmail: string, data: Record<string, any>) {
+export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started" | "update_role", senderEmail: string, data: Record<string, any>) {
     const roomInfo = socketMap.get(roomId)
     if (!roomInfo) {
         return false

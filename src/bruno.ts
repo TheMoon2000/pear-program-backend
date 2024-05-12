@@ -1,9 +1,11 @@
+import axios from "axios";
 import { sendEventOfType, sendNotificationToRoom } from "./chat"
 import { ChatMessage, ChatMessageSection, ParticipantInfo, BrunoState } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
 import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
+import { parse } from "csv-parse/sync";
 
 /* To Do Summary:
  + Implement Switching Roles Functionality in Turn Taking Intervention (Either GPT or Hard-Code)
@@ -13,6 +15,8 @@ import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
  + Switch all internal variables to dictionary state to send to Jerry
  + (Future) Calculate Conversation Data Metrics
 */
+
+const dyteInstance = axios.create({ baseURL: "https://api.dyte.io/v2", headers: { Authorization: `Basic ${process.env.DYTE_AUTH}`} })
 
 export default class Bruno {
     readonly roomId: string
@@ -34,7 +38,6 @@ export default class Bruno {
     // private brunoMessages: ChatCompletionMessageParam[] = []
     
     private interventionSpecificMessages: ChatCompletionMessageParam[] = [];
-
     private participantData: ParticipantInfo[] = [];
 
     // private bothParticipantsJoined: boolean
@@ -46,6 +49,8 @@ export default class Bruno {
     private participantNames: string[] = []
 
     // private periodicFunctionStarted: boolean
+
+    private dyteMeetingId: string
 
     private state: BrunoState
 
@@ -66,7 +71,7 @@ export default class Bruno {
      * @param roomId The ID of the room.
      * @param send An asynchronous function for sending messages as Bruno into the room.
      */
-    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, savedState?: BrunoState) {
+    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, dyteMeetingId: string, savedState?: BrunoState) {
         this.roomId = roomId
         this.condition = condition
         this.send = send
@@ -81,8 +86,8 @@ export default class Bruno {
         // this.introductionFlag = false
         // this.periodicFunctionStarted = false
 
-        this.state = savedState ?? {stage: 0}
-
+        this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
+        this.dyteMeetingId = dyteMeetingId
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
 
@@ -92,7 +97,7 @@ export default class Bruno {
         var chunkSize = 10
 
         //If code history longer than designated chunkSize
-        if (codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
+        if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
             var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
 
             var numNewLines = code.match(/\n/g)?.length || -1
@@ -443,12 +448,12 @@ export default class Bruno {
         }
     }
 
-    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number) {
+    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number, email: string) {
         const section = this.currentChatHistory[messageId].content?.[contentIndex]
         if (section) {
             section.choice_index = choiceIndex
         }
-        console.log(`User made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
+        console.log(`User ${email} made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
 
         if (this.state.stage === 1) {
             await this.sendTypingStatus(true)
@@ -460,7 +465,7 @@ export default class Bruno {
             await sleep(5000)
 
             await this.sendTypingStatus(true)
-            await sleep(10000)
+            await sleep(5000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", 
@@ -477,6 +482,11 @@ export default class Bruno {
             await this.send([
                     {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
                 ])
+
+                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+                    [this.participantData[0].email]: 1,
+                    [this.participantData[1].email]: 2
+                } })
 
             let conn = await getConnection()
             const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
@@ -505,7 +515,14 @@ export default class Bruno {
                     console.warn("Room not found!")
                 } else {
                     await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
-                    await sendEventOfType(this.roomId, "question_update", "AI", {"question": testCase[0]})
+                    const otherUser = this.participantData.filter(p => p.email != email)[0]
+                    await sendEventOfType(this.roomId, "question_update", otherUser.email, {"question": testCase[0]})
+                    await this.send([
+                        {
+                            type: "text",
+                            value: testCase[0].description
+                        }
+                    ])
                 }
             }
 
@@ -537,6 +554,29 @@ export default class Bruno {
         }    
     }
 
+    async onQuestionPassed(questionId: string, questionTitle: string, testResults: any[]) {
+        console.log('passed', questionId, testResults)
+        if (!this.state.solvedQuestionIds.includes(questionId)) {
+            this.state.solvedQuestionIds.push(questionId)
+        
+            await this.send([{
+                type: "text",
+                value: `Congrats for solving ${questionTitle}! I hope that you enjoyed this coding session.`
+            }])
+            await this.saveState()
+            await sleep(3000)
+            await this.send([{
+                type: "text",
+                value: "Please take a few minutes to share your feedback regarding your coding experience at [google form link]."
+            }])
+            await sleep(3000)
+            await this.send([{
+                type: "text",
+                value: "If you are interested in working on more problems, you can select a different problem by clicking the **Switch Coding Problem** button."
+            }])
+        }
+    }
+
     /**
      * Called when all participants left the room. The Bruno instance is automatically deallocated.
      */
@@ -549,6 +589,22 @@ export default class Bruno {
         const conn = await getConnection()
         await makeQuery(conn, "UPDATE Rooms SET bruno_state = ? WHERE id = ?", [JSON.stringify(this.state), this.roomId])
         conn.release()
+    }
+
+    // Failable. Need to be catched.
+    async fetchTranscript() {
+        const { transcript_download_url } = (await dyteInstance.get(`/meetings/${this.dyteMeetingId}/active-transcript`)).data.data
+
+        if (transcript_download_url) {
+            const csv = await axios.get(transcript_download_url).then(r => r.data) // should be a string
+            const transcript = (parse(csv, { skip_empty_lines: true }) as string[][]).map((item: any) => {
+                return { timestamp: Number(item[0]), name: item[4] as string, speech: item[5] as string }
+            })
+            return transcript
+        } else {
+            console.warn(`Transcript not available for room ${this.roomId}`)
+            return null
+        }
     }
 }
 
