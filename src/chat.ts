@@ -259,7 +259,7 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
     return true
 }
 
-export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started" | "update_role", senderEmail: string, data: Record<string, any>) {
+export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started" | "update_role" | "leave_session", senderEmail: string, data: Record<string, any>) {
     const roomInfo = socketMap.get(roomId)
     if (!roomInfo) {
         return false

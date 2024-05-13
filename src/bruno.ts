@@ -337,6 +337,9 @@ export default class Bruno {
                 let conn = await getConnection()
                 await makeQuery(conn, "UPDATE Participants SET role = 1 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[0].email])
                 await makeQuery(conn, "UPDATE Participants SET role = 2 WHERE room_id = ? AND user_email = ?", [this.roomId, participants[1].email])
+                if (participants[0].name == participants[1].name) {
+                    await makeQuery(conn, "UPDATE Participants SET name = ? WHERE room_id = ? AND user_email = ?", [participants[1].name + "2", this.roomId, participants[1].email])
+                }
                 conn.release()
 
                 this.participantNames[0] = participants[0].name
@@ -406,17 +409,17 @@ export default class Bruno {
             }
             
             if (studentName !== ""){
-                await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
+                // await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
                 // this.brunoMessages.push({role: "system", content: studentName + " is currently offline. There is currently one student remaining in the room"})
                 
-                // await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
-                // await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
-                // await sendEventOfType(this.roomId, "participant_update", "AI", {"choices": ["Join New Coding Session [Currently Non-Functional]"]})
+                await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
+                await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
+                await sendEventOfType(this.roomId, "leave_session", "AI", {"choices": ["Join New Coding Session [Currently Non-Functional]"]})
 
-                await this.send([
-                    {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
-                    {type: "choices", value: ["Join New Coding Session [Currently Non-Functional]"]}
-                ])
+                // await this.send([
+                //     {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
+                //     {type: "choices", value: ["Join New Coding Session [Currently Non-Functional]"]}
+                // ])
                 
                 // TODO: pause periodic function instead of clearing?
                 this.bothParticipantsOnline = false
