@@ -238,7 +238,7 @@ export default class Bruno {
             if (transcript !== null) {
                 var curIndex = transcript.length - 1
                 var curTime = transcript[curIndex].timestamp
-                var beginPeriod = curTime - (5 * 60 * 1000)
+                var beginPeriod = curTime - (5 * 60)
 
                 while (curIndex >= 0 && curTime >= beginPeriod) {
                     if (transcript[curIndex].name == this.participantData[0].name) {
