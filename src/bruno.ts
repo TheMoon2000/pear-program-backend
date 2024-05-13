@@ -162,41 +162,40 @@ export default class Bruno {
             var codePercentageA = codeContributions[0]
             var codePercentageB = codeContributions[1]
     
-            var role1Goal = " should be writing the majority of the code. ";
-            var role2Goal = " should be the main contributor to the conversation. ";
-    
-            var role1, role2, role1Metric, role2Metric = ""
-
+            var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
             if (participants[0].role == 1) {
                 role1 = "[DRIVER]"
                 role2 = "[NAVIGATOR]"
-                role1Metric = codePercentageA
-                role2Metric = bTalkPercentage
+
+                role1Goal = " should be writing the majority of the code. ";
+                role2Goal = " should be the main contributor to the conversation. ";
+
+                role1Metric = codePercentageA + "% Code Written"
+                role2Metric = bTalkPercentage + "% Participation in Conversation"
             }
             else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
                 role2 = "[DRIVER]"
 
-                var temp = role2Goal
-                role2Goal = role1Goal
-                role1Goal = temp
+                role1Goal = " should be the main contributor to the conversation. ";
+                role2Goal = " should be writing the majority of the code. ";
 
-                role1Metric = aTalkPercentage
-                role2Metric = codePercentageB
+                role1Metric = aTalkPercentage + "% Participation in Conversation"
+                role2Metric = codePercentageB + "% Code Written"
             }
 
             this.interventionSpecificMessages.push({
                 role: "system",
                 content: `${participants[0].name} has the ${role1} and therefore ${role1Goal}. ${participants[1].name} has the ${role2} role and therefore ${role2Goal}
                           Evaluate ${participants[0].name} and ${participants[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
-                          The students should NOT have a balanced workload.",`,
+                          The students should NOT have a balanced workload.`,
               });
 
             //remove switching roles / hardcode
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}% Code Written
-                          \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}% Participation in Conversation`,
+                content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}
+                          \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}`,
               });
             // await this.gpt();
 
