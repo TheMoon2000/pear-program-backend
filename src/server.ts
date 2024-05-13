@@ -9,7 +9,7 @@ import { roomRouter } from "./routes/rooms";
 import { getConnection, makeQuery } from "./utils/database";
 
 const app = express()
-const port = 8012
+const port = 8010
 
 const corsOptions = {
     origin: "*"
@@ -36,6 +36,10 @@ app.get("/questions", async (req, res) => {
     }
 });
 
-app.listen(port, () => {
+app.listen(port, async () => {
+    let conn = await getConnection()
+    await makeQuery(conn, "UPDATE Participants SET is_online = 0")
+    conn.release()
+    
     console.log(`Pear Program backend listening on port ${port}`)
 })

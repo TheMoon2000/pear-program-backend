@@ -435,9 +435,9 @@ export default class Bruno {
                 // await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
                 // this.brunoMessages.push({role: "system", content: studentName + " is currently offline. There is currently one student remaining in the room"})
                 
-                await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
-                await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
-                await sendEventOfType(this.roomId, "leave_session", "AI", {"choices": ["Join New Coding Session [Currently Non-Functional]"]})
+                // await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
+                // await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
+                await sendEventOfType(this.roomId, "leave_session", "AI", { title: `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`, message: `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.` })
 
                 // await this.send([
                 //     {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
@@ -483,7 +483,7 @@ export default class Bruno {
 
         if (this.state.stage === 1) {
             await this.sendTypingStatus(true)
-            await sleep(10000)
+            await sleep(3000)
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
@@ -496,13 +496,13 @@ export default class Bruno {
             await this.send([
                 {type: "text", 
                 value: "Heres how to pair program: \n\n\
-                        There are two roles in pair programming: \n\n\
-                         - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
-                         - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
-                        **Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.\n\n\
-                        **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.\n\n\
-                        **Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.\n\n\
-                        Need more guidance? Check out this document [link]" } ])
+There are two roles in pair programming: \n\n\
+    - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
+    - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
+**Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.\n\n\
+**Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.\n\n\
+**Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.\n\n\
+Need more guidance? Check out this document [link]" } ])
             await sleep(5000)
 
             await this.send([
