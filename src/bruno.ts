@@ -54,6 +54,8 @@ export default class Bruno {
 
     private state: BrunoState
 
+    private numRoleSwitches: number
+
     // number of students in prompt
     private initialPrompt = "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
                             \ Code in Place is now piloting a Pair Programming feature, where two students are paired up to work together on an assignment. As a mentor, your role is to guide these students through the pair programming process and help them work together. Your job also involves assessing the students' individual contributions to the assignment in terms of code written and involvement in conversations or brainstorming. You perform this assessment by looking at metrics provided to you by the shared coding environment the students are using. \n \
@@ -78,7 +80,7 @@ export default class Bruno {
         this.bothParticipantsOnline = false
         // this.introductionFlag = false
         // this.periodicFunctionStarted = false
-
+        this.numRoleSwitches = 0
         this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
         this.dyteMeetingId = dyteMeetingId
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
@@ -151,8 +153,29 @@ export default class Bruno {
         }
     }
 
-    // Students switch on their own -- remind them to switch if they haven't switched in the past 10
-    async turnTakingIntervention(participants: ParticipantInfo[]){             
+    async onRoleSwitch() {
+        clearInterval(this.periodicFunctionInstance)
+        this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+    }
+
+    async getNumSwitches() {
+        //get numswitches from database
+        return 0
+    }
+
+    properlyFulfilledRoles(driverCode: number, navigatorTalk: number) {
+        var threshold = 70
+        if (driverCode < threshold || navigatorTalk < threshold) {
+            return false
+        }
+        return true
+    }
+
+    // Function only called when students haven't switched in the past 10 minutes
+    async turnTakingIntervention(participants: ParticipantInfo[]){
+        // var databaseNumSwitches = await this.getNumSwitches() 
+        // var numSwitches = databaseNumSwitches - this.numRoleSwitches           
+        
         if (participants[0].role != 0 && participants[1].role != 0) {
             var talkPercentages = await this.getConversationContribution()
             var aTalkPercentage = talkPercentages[0];
@@ -163,6 +186,7 @@ export default class Bruno {
             var codePercentageB = codeContributions[1]
     
             var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
+            var fulfilledRoles = false
             if (participants[0].role == 1) {
                 role1 = "[DRIVER]"
                 role2 = "[NAVIGATOR]"
@@ -172,6 +196,8 @@ export default class Bruno {
 
                 role1Metric = codePercentageA + "% Code Written"
                 role2Metric = bTalkPercentage + "% Participation in Conversation"
+
+                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), parseFloat(bTalkPercentage))
             }
             else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
@@ -182,6 +208,8 @@ export default class Bruno {
 
                 role1Metric = aTalkPercentage + "% Participation in Conversation"
                 role2Metric = codePercentageB + "% Code Written"
+
+                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), parseFloat(aTalkPercentage))
             }
 
             this.interventionSpecificMessages.push({
@@ -202,7 +230,16 @@ export default class Bruno {
             await this.gptLimitedContext();
             this.interventionSpecificMessages.pop();
             this.interventionSpecificMessages.pop();
-        }
+
+            // if (numSwitches < 1 && fulfilledRoles) {
+            if (fulfilledRoles)
+                await this.sendTypingStatus(true)
+                await sleep(1000)
+                await this.sendTypingStatus(false)
+                await this.send([
+                    {type: "text", value: "Great work. You should now switch roles using the switch roles button at the top of your screen." } ])
+            }
+            // this.numRoleSwitches = databaseNumSwitches
     }
 
     async talkTimeIntervention(participants: ParticipantInfo[]){
