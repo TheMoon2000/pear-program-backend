@@ -237,7 +237,6 @@ roomRouter.post("/", async (req, res) => {
         
         const sessionId = v4().replace(/-/g, "");
         console.log("Creating new room with id", sessionId)
-        return
 
         // Create user
         await execAsync(`docker exec env useradd ${sessionId}`)
