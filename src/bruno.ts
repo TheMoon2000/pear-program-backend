@@ -155,7 +155,7 @@ export default class Bruno {
 
     async onRoleSwitch() {
         // Only runs if room condition is 1 (turn taking intervention room)
-        if (this.condition === 1) { 
+        if (this.condition === 1 && this.bothParticipantsOnline) { 
             clearInterval(this.periodicFunctionInstance)
             this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
         }
@@ -278,7 +278,7 @@ export default class Bruno {
             if (transcript !== null) {
                 var curIndex = transcript.length - 1
                 var curTime = transcript[curIndex].timestamp
-                var beginPeriod = curTime - (5 * 60)
+                var beginPeriod = curTime - (10 * 60)
 
                 while (curIndex >= 0 && curTime >= beginPeriod) {
                     if (transcript[curIndex].name == this.participantData[0].name) {
@@ -455,8 +455,8 @@ export default class Bruno {
                 await this.saveState()
 
             }
-            else if (!this.bothParticipantsOnline) {  // If one participant was previously offline and now both are online, restart periodic function
-                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), 5 * 60 * 1000)
+            else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
+                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), 10 * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
         }
