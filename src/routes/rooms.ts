@@ -200,21 +200,21 @@ roomRouter.post("/", async (req, res) => {
         /* In either case, register the user first */
         await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW(3)", [userEmail, username, username])
 
-        const [mostRecentRoom] = await makeQuery(conn, "SELECT * FROM Rooms ORDER BY creation_date DESC LIMIT 1")
+        const [mostRecentRoom] = await makeQuery(conn, "SELECT Rooms.id, Rooms.dyte_meeting_id, SUM(Participants.is_online >= 1) AS online_count, JSON_ARRAYAGG(Participants.user_email) as email_list FROM Rooms INNER JOIN Participants ON Rooms.id = Participants.room_id GROUP BY 1,2 ORDER BY creation_date DESC LIMIT 1")
+        console.log(mostRecentRoom)
 
-        if (mostRecentRoom.length > 0 && mostRecentRoom[0].is_full == 0) {
-            console.log("Found available room:", mostRecentRoom[0].id)
+        // Case 1: user has been waiting by themselves alone in a room. Get them there
+        if (mostRecentRoom.length > 0 && mostRecentRoom[0].email_list.length === 1 && mostRecentRoom[0].email_list[0] === userEmail) {
+            console.log(`Directing ${userEmail} to the room they opened themselves (${mostRecentRoom[0].id})`)
+            return res.json({
+                room_id: mostRecentRoom[0].id,
+                is_new_room: false,
+                already_in_room: true
+            })
+        // Case 2: another user is online and waiting by themselves in a room (hence email_list.length == 1). Assign this user to the room.
+        } else if (mostRecentRoom.length > 0 && Number(mostRecentRoom[0].online_count) === 1 && mostRecentRoom[0].email_list.length === 1) {
+            console.log(`Assigning ${userEmail} to available room with ${mostRecentRoom[0].email_list[0]}`)
 
-            // Edge case: check if current participant is already in the room
-            const [currentParticipants] = await makeQuery(conn, "SELECT * FROM Participants WHERE room_id = ? AND user_email = ?", [mostRecentRoom[0].id, userEmail])
-            if (currentParticipants.length === 1) { // user must be already be waiting in a room, get them there
-
-                return res.json({
-                    room_id: mostRecentRoom[0].id,
-                    is_new_room: false,
-                    already_in_room: true
-                })
-            }
             // Insert participant into dyte meeting
             const insertionResponse = await dyteInstance.post(`/meetings/${mostRecentRoom[0].dyte_meeting_id}/participants`, {
                 preset_name: "group_call_participant",
@@ -234,7 +234,9 @@ roomRouter.post("/", async (req, res) => {
             })
         }
 
+        
         const sessionId = v4().replace(/-/g, "");
+        console.log("Creating new room with id", sessionId)
 
         // Create user
         await execAsync(`docker exec env useradd ${sessionId}`)
@@ -246,7 +248,6 @@ roomRouter.post("/", async (req, res) => {
 
         // Create token
         const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`).then(r => r.data)
-        console.log(`got token ${userToken} for user ${sessionId}`)
 
         // Count the number of existing rooms
         const [roomCount] = await makeQuery(conn, "SELECT COUNT(id) as count FROM Rooms")

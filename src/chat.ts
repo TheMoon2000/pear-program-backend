@@ -5,7 +5,7 @@ import { ChatMessage, ParticipantInfo } from "./constants";
 import semaphore, { Semaphore } from "semaphore";
 import Bruno from "./bruno";
 
-const chatServer = new WebSocketServer({ port: 4011, path: "/socket", clientTracking: false, maxPayload: 1048576 })
+const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
 export const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
@@ -108,6 +108,9 @@ chatServer.on("connection", (ws, request) => {
         })
     })
 
+    sql("UPDATE Participants SET is_online = is_online + 1 WHERE room_id = ? AND user_email = ?", [roomId, email]).catch(err => {
+        console.error(err)
+    })
 
     ws.on("message", (data: Buffer, isBinary) => {
         if (isBinary) {
@@ -208,6 +211,7 @@ chatServer.on("connection", (ws, request) => {
             socketMap.get(roomId)?.ai.onRoomClose()
             socketMap.delete(roomId)
             console.log(`All participants left room ${roomId}, closing...`)
+            sql("UPDATE Participants SET is_online = 0 WHERE room_id = ?", [roomId])
         } else if (leftUser?.email) {
             sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
                 const activeEmails = Array.from(identityMap.values()).map(v => v.email)
@@ -217,7 +221,9 @@ chatServer.on("connection", (ws, request) => {
                 }))
                 socketMap.get(roomId)?.ai.onParticipantsUpdated(currentParticipants)
             })
+            sql("UPDATE Participants SET is_online = is_online - 1 WHERE room_id = ? AND user_email = ?", [roomId, email])
         }
+
         
         if (leftUser?.email) {
             sendNotificationToRoom(roomId, `${leftUser?.name} has left the room.`)
