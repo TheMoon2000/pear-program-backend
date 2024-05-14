@@ -154,8 +154,11 @@ export default class Bruno {
     }
 
     async onRoleSwitch() {
-        clearInterval(this.periodicFunctionInstance)
-        this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+        // Only runs if room condition is 1 (turn taking intervention room)
+        if (this.condition === 1) { 
+            clearInterval(this.periodicFunctionInstance)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+        }
     }
 
     async getNumSwitches() {
