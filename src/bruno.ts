@@ -56,6 +56,8 @@ export default class Bruno {
 
     private numRoleSwitches: number
 
+    private periodLength = 10
+
     // number of students in prompt
     private initialPrompt = "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
                             \ Code in Place is now piloting a Pair Programming feature, where two students are paired up to work together on an assignment. As a mentor, your role is to guide these students through the pair programming process and help them work together. Your job also involves assessing the students' individual contributions to the assignment in terms of code written and involvement in conversations or brainstorming. You perform this assessment by looking at metrics provided to you by the shared coding environment the students are using. \n \
@@ -157,7 +159,7 @@ export default class Bruno {
         // Only runs if room condition is 1 (turn taking intervention room)
         if (this.condition === 1 && this.bothParticipantsOnline) { 
             clearInterval(this.periodicFunctionInstance)
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
         }
     }
 
@@ -278,7 +280,9 @@ export default class Bruno {
             if (transcript !== null) {
                 var curIndex = transcript.length - 1
                 var curTime = transcript[curIndex].timestamp
-                var beginPeriod = curTime - (10 * 60)
+
+                // CHANGE TIME PERIOD LATER
+                var beginPeriod = curTime - (this.periodLength * 60)
 
                 while (curIndex >= 0 && curTime >= beginPeriod) {
                     if (transcript[curIndex].name == this.participantData[0].name) {
@@ -322,18 +326,41 @@ export default class Bruno {
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
+            await this.send([
+                {type: "text", value: `Talk Time` } ])
         }
-        else if (this.condition === 1) { await this.turnTakingIntervention(participants)}
-        else if (this.condition === 2) { await this.intersubjectivityIntervention(participants)}
+        else if (this.condition === 1) { 
+            await this.turnTakingIntervention(participants)             
+            await this.send([
+                {type: "text", value: `Turn Taking` } ])
+            }
+        else if (this.condition === 2) { 
+            await this.intersubjectivityIntervention(participants)
+            await this.send([
+                {type: "text", value: `Intersubjectivity` } ])
+        }
     }
 
     // Query GPT w/ limited context and display response in chat room
     async gptLimitedContext() {
-        const completion = await this.openai.chat.completions.create({
-        messages: this.interventionSpecificMessages,
-        model: "gpt-3.5-turbo",
-        });
+        try {
+            const completion = await this.openai.chat.completions.create({
+            messages: this.interventionSpecificMessages,
+            model: "gpt-3.5-turbo",
+            });
 
+
+            await this.sendTypingStatus(true);
+            await sleep(1000);
+            await this.sendTypingStatus(false);
+
+            if (completion.choices[0].message.content != null ) {
+                await this.send([{ type: "text", value: completion.choices[0].message.content }]);
+            }
+        }
+        catch {
+
+        }
         // Maybe Delete
 
         // this.brunoMessages.push({
@@ -342,13 +369,6 @@ export default class Bruno {
         //     "You have been provided metrics and were asked to evaluate the students. The following response is your analysis:",
         // });
         // this.brunoMessages.push(completion.choices[0].message);
-
-        await this.sendTypingStatus(true);
-        await sleep(1000);
-        await this.sendTypingStatus(false);
-        await this.send([
-        { type: "text", value: completion.choices[0].message.content || "" },
-        ]);
     }
 
 
@@ -456,7 +476,7 @@ export default class Bruno {
 
             }
             else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
-                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), 10 * 60 * 1000)
+                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
         }
@@ -597,7 +617,7 @@ Need more guidance? Check out this document [link]" } ])
             await this.sendTypingStatus(false)
             await this.send([{type: "text", value: "Press the Run Code button in the top right corner to execute your program." } ])
 
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), 10 * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
 
             // this.brunoMessages.push({
             //     role: "system",
