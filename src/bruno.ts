@@ -46,7 +46,7 @@ export default class Bruno {
 
     // private introductionFlag: boolean
 
-    private participantNames: string[] = []
+    private participantNames: [number, number][] = []
 
     // private periodicFunctionStarted: boolean
 
@@ -57,6 +57,9 @@ export default class Bruno {
     private numRoleSwitches: number
 
     private periodLength = 10
+
+    //Last line of previous chunk
+    private chunkHistory = 0
 
     // number of students in prompt
     private initialPrompt = "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
@@ -91,7 +94,7 @@ export default class Bruno {
     async intersubjectivityIntervention(participants: ParticipantInfo[]){
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
 
-        var chunkSize = 10
+        var chunkSize = 4
 
         //If code history longer than designated chunkSize
         if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
@@ -106,8 +109,8 @@ export default class Bruno {
                 }
             }
 
-            var firstNewLine = 0
-            var lastNewLine = chunkSize
+            var firstNewLine = this.chunkHistory
+            var lastNewLine = firstNewLine + chunkSize
 
             var chunkNotFound = true
             var chunkWriter = ""
@@ -121,11 +124,15 @@ export default class Bruno {
                     chunkWriter = participants[0].name
                     nonChunkWriter = participants[1].name
                     chunkNotFound = false
+
+                    this.chunkHistory = lastNewLine
                 }
                 else if (parseFloat(codePercentages[1]) >= 70) {
                     chunkWriter = participants[1].name
                     nonChunkWriter = participants[0].name
                     chunkNotFound = false
+
+                    this.chunkHistory = lastNewLine
                 } else {
                     firstNewLine = firstNewLine + 1
                     lastNewLine = lastNewLine + 1
