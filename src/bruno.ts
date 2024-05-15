@@ -124,15 +124,11 @@ export default class Bruno {
                     chunkWriter = participants[0].name
                     nonChunkWriter = participants[1].name
                     chunkNotFound = false
-
-                    this.chunkHistory = lastNewLine
                 }
                 else if (parseFloat(codePercentages[1]) >= 70) {
                     chunkWriter = participants[1].name
                     nonChunkWriter = participants[0].name
                     chunkNotFound = false
-
-                    this.chunkHistory = lastNewLine
                 } else {
                     firstNewLine = firstNewLine + 1
                     lastNewLine = lastNewLine + 1
@@ -140,6 +136,8 @@ export default class Bruno {
             }
             
             if(!chunkNotFound) {
+                this.chunkHistory = lastNewLine
+
                 // Check if follow-up works
                 this.interventionSpecificMessages.push({
                     role: "system",
