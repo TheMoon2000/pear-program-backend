@@ -387,18 +387,18 @@ export default class Bruno {
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
-            await this.send([
-                {type: "text", value: `Talk Time` } ])
+        //     await this.send([
+        //         {type: "text", value: `Talk Time` } ])
         }
         else if (this.condition === 1) { 
             await this.turnTakingIntervention(participants)             
-            await this.send([
-                {type: "text", value: `Turn Taking` } ])
+            // await this.send([
+            //     {type: "text", value: `Turn Taking` } ])
             }
         else if (this.condition === 2) { 
             await this.intersubjectivityIntervention(participants)
-            await this.send([
-                {type: "text", value: `Intersubjectivity` } ])
+            // await this.send([
+            //     {type: "text", value: `Intersubjectivity` } ])
         }
     }
 
