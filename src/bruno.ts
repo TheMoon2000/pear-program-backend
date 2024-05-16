@@ -564,7 +564,7 @@ export default class Bruno {
                 
                 // await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
                 // await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
-                await sendEventOfType(this.roomId, "leave_session", "AI", { title: `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`, message: `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.` })
+                await sendEventOfType(this.roomId, "leave_session", "AI", { title: `${studentName} is currently offline. You can wait for ${studentName} to rejoin by closing this dialog, or navigate to pearprogram.co to start a new session.`, message: `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.` })
 
                 // await this.send([
                 //     {type: "text", value: "Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress."},
@@ -624,8 +624,8 @@ export default class Bruno {
                 {type: "text", 
                 value: "Heres how to pair program: \n\n\
 There are two roles in pair programming: \n\n\
-    - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
-    - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
+  - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
+  - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
 **Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.\n\n\
 **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.\n\n\
 **Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.\n\n\
@@ -669,7 +669,7 @@ Need more guidance? Check out this document [link]" } ])
                 } else {
                     await sendNotificationToRoom(this.roomId, `Bruno has pulled up the coding problem '${testCase[0].title}'.`)
                     const otherUser = this.participantData.filter(p => p.email != email)[0]
-                    await sendEventOfType(this.roomId, "question_update", otherUser.email, {"question": testCase[0]})
+                    await sendEventOfType(this.roomId, "question_update", "AI", { "email": email, "question": testCase[0]})
                     await this.send([
                         {
                             type: "text",

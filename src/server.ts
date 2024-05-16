@@ -36,6 +36,20 @@ app.get("/questions", async (req, res) => {
     }
 });
 
+app.get("/questions/:question_id", async (req, res) => {
+    const conn = await getConnection()
+
+    try {
+        const [testcases] = await makeQuery(conn, "SELECT * FROM TestCases WHERE question_id = ?", [req.params.question_id])
+        res.json(testcases[0])
+    } catch (error) {
+        console.error(error)
+        res.sendStatus(500)
+    } finally {
+        conn.release()
+    }
+});
+
 app.listen(port, async () => {
     let conn = await getConnection()
     await makeQuery(conn, "UPDATE Participants SET is_online = 0")

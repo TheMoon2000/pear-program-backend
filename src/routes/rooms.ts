@@ -7,6 +7,7 @@ import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
 import { sendNotificationToRoom, sendEventOfType, socketMap } from "../chat";
+import { WebSocket } from "ws";
 
 
 const pistonInstance = axios.create({ baseURL: "http://127.0.0.1:2000/api/v2" })
@@ -269,6 +270,25 @@ roomRouter.post("/", async (req, res) => {
         }).then(r => r.data)
 
         await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+
+        // Insert starter code into rustpad
+        console.log(await new Promise<any>((r, _) => {
+            const roomWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}`)
+            roomWs.once("open", () => {
+                roomWs.send(JSON.stringify({
+                    Edit: { revision: 0, operation: [initialCode] }
+                }), r)
+            })
+        }))
+
+        await new Promise<any>((r, _) => {
+            const authorWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}-authors`)
+            authorWs.once("open", () => {
+                authorWs.send(JSON.stringify({
+                    Edit: { revision: 0, operation: [initialAuthorMap] }
+                }), r)
+            })
+        })
 
         res.json({
             room_id: sessionId,
