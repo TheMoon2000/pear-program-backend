@@ -521,6 +521,13 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
+                    {type: "text", value: "Please hold on while your audio settings load." } ])
+                await sleep(10000)
+
+                await this.sendTypingStatus(true)
+                await sleep(1000)
+                await this.sendTypingStatus(false)
+                await this.send([
                     {type: "text", value: "You can change your video settings by clicking the Expand Video button in the top left." } ])
                 await sleep(3000)
 
