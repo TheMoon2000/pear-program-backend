@@ -132,14 +132,14 @@ export default class Bruno {
                     var authorMapIndex = firstNewLine + chunkSize
 
                         // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
-                    if (parseFloat(codePercentages[0]) >= 70 && ((!(authorMapIndex in this.localAuthorMap) || (this.localAuthorMap[authorMapIndex] == 1)))) { 
-                            this.localAuthorMap[authorMapIndex] = 0  // Add this chunk to map w/ author = 0
+                    if (parseFloat(codePercentages[0]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
+                            this.localAuthorMap.set(authorMapIndex, 0)  // Add this chunk to map w/ author = 0
                             chunkWriter = participants[0].name
                             nonChunkWriter = participants[1].name
                             chunkNotFound = false
                     }
-                    else if (parseFloat(codePercentages[1]) >= 70 && ((!(authorMapIndex in this.localAuthorMap) || (this.localAuthorMap[authorMapIndex] == 0)))) {
-                            this.localAuthorMap[authorMapIndex] = 1 // Add this chunk to map w/ author = 1
+                    else if (parseFloat(codePercentages[1]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
+                            this.localAuthorMap.set(authorMapIndex, 1) // Add this chunk to map w/ author = 1
                             chunkWriter = participants[1].name
                             nonChunkWriter = participants[0].name
                             chunkNotFound = false
