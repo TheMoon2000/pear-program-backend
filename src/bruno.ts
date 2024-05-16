@@ -6,6 +6,7 @@ import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
 import { parse } from "csv-parse/sync";
+import { NumericLiteral } from "typescript";
 
 /* To Do Summary:
  + Implement Switching Roles Functionality in Turn Taking Intervention (Either GPT or Hard-Code)
@@ -59,12 +60,14 @@ export default class Bruno {
     private periodLength = 10
 
     //Last line of previous chunk
-    private chunkHistory = 0
+    // private chunkHistory = -1
 
     // number of students in prompt
     private initialPrompt = "You are Bruno. You are a mentor for the Code in Place project, which is a free intro-to-coding course from Stanford University that is taught online. The Code in Place project recruits and trains one volunteer teacher for every students in order to maintain a proportional ratio of students to teachers. \n \
                             \ Code in Place is now piloting a Pair Programming feature, where two students are paired up to work together on an assignment. As a mentor, your role is to guide these students through the pair programming process and help them work together. Your job also involves assessing the students' individual contributions to the assignment in terms of code written and involvement in conversations or brainstorming. You perform this assessment by looking at metrics provided to you by the shared coding environment the students are using. \n \
                             \ Do not number or label your messages. Do not break character or mention that you are an AI Language Model.";
+
+    private localAuthorMap: Map<number, number> = new Map<number, number>();
   
     /**
      * Called when Bruno has been added to a room. The room could either be newly created (in which case, the chat history would be empty), or restored from an existing session (in which case, the chat history is not empty). The latter situation happens when all participants have left a room and then someone joined back. The moment all participants leave a room, its Bruno instance is deallocated.
@@ -98,50 +101,70 @@ export default class Bruno {
 
         //If code history longer than designated chunkSize
         if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
-            var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
+            // var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
+            var code = codeHistory[codeHistory.length - 1].author_map
 
-            var numNewLines = code.match(/\n/g)?.length || -1
-
-            var newLineIndices: Number[] = [] 
+            var newLineIndices: number[] = [] 
             for (let i = 0; i < code.length; i++) {
-                if (code[i] === "\n") {
+                if (code[i] == '\n') {
                     newLineIndices.push(i)
                 }
             }
+            var numNewLines = newLineIndices.length
 
-            var firstNewLine = this.chunkHistory
+            var firstNewLine = -1
             var lastNewLine = firstNewLine + chunkSize
 
             var chunkNotFound = true
             var chunkWriter = ""
             var nonChunkWriter = ""
-
-
-            // TO DO: Will repeat the same chunk, need to remember which chunks have already been looked at
-            while ((lastNewLine < numNewLines - 1) && chunkNotFound) {
-                var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
-                if (parseFloat(codePercentages[0]) >= 70) {
-                    chunkWriter = participants[0].name
-                    nonChunkWriter = participants[1].name
-                    chunkNotFound = false
+        
+            while ((lastNewLine <= numNewLines - 1) && chunkNotFound) {
+                if (firstNewLine == -1) {
+                    var curSubstring = code.substring(0, newLineIndices[lastNewLine])     
+                } else {
+                    var curSubstring = code.substring(newLineIndices[firstNewLine] + 1, newLineIndices[lastNewLine]) 
                 }
-                else if (parseFloat(codePercentages[1]) >= 70) {
-                    chunkWriter = participants[1].name
-                    nonChunkWriter = participants[0].name
-                    chunkNotFound = false
+
+                //If curSubstring Does Not Contain System-Provided Code
+                if (curSubstring.indexOf("?") == -1) {
+                    var codePercentages = await this.getCodeContribution(curSubstring)
+                    var authorMapIndex = firstNewLine + chunkSize
+
+                        // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
+                    if (parseFloat(codePercentages[0]) >= 70 && ((!(authorMapIndex in this.localAuthorMap) || (this.localAuthorMap[authorMapIndex] == 1)))) { 
+                            this.localAuthorMap[authorMapIndex] = 0  // Add this chunk to map w/ author = 0
+                            chunkWriter = participants[0].name
+                            nonChunkWriter = participants[1].name
+                            chunkNotFound = false
+                    }
+                    else if (parseFloat(codePercentages[1]) >= 70 && ((!(authorMapIndex in this.localAuthorMap) || (this.localAuthorMap[authorMapIndex] == 0)))) {
+                            this.localAuthorMap[authorMapIndex] = 1 // Add this chunk to map w/ author = 1
+                            chunkWriter = participants[1].name
+                            nonChunkWriter = participants[0].name
+                            chunkNotFound = false
+                    } else {
+                        if (authorMapIndex in this.localAuthorMap) {  // If chunk already examined and has not changed
+                            firstNewLine = lastNewLine;  // Iterate by chunkSize
+                            lastNewLine += chunkSize;
+                          } else {
+                            firstNewLine = firstNewLine + 1;
+                            lastNewLine = lastNewLine + 1;
+                        }
+                    }
                 } else {
                     firstNewLine = firstNewLine + 1
                     lastNewLine = lastNewLine + 1
                 }
-            }
-            
+            }           
+
             if(!chunkNotFound) {
-                this.chunkHistory = lastNewLine
+                // this.chunkHistory = lastNewLine
 
                 // Check if follow-up works
                 this.interventionSpecificMessages.push({
                     role: "system",
-                    content: `There is a large chunk of code from lines ${firstNewLine} to ${lastNewLine} written predominantly by ${chunkWriter}. Have ${nonChunkWriter} demonstrate their understanding of the code that ${chunkWriter} wrote
+                    content: `There is a large chunk of code from lines ${firstNewLine + 2} to ${lastNewLine + 1} written predominantly by ${chunkWriter}. Have ${nonChunkWriter} demonstrate their understanding of the code that ${chunkWriter} wrote
                             by explaining those specific lines of code to their partner.`,
                 });
                 // await this.gpt();
@@ -153,11 +176,44 @@ export default class Bruno {
                 await sleep(1000);
                 await this.sendTypingStatus(false);
                 await this.send([
-                    {type: "text", value: `${chunkWriter}, was ${nonChunkWriter}'s explanation correct? If not, please help ${nonChunkWriter} understand each line of the code from lines ${firstNewLine} to ${lastNewLine}.`,            }
+                    {type: "text", value: `${chunkWriter}, was ${nonChunkWriter}'s explanation correct? If not, please help ${nonChunkWriter} understand each line of the code from lines ${firstNewLine + 2} to ${lastNewLine + 1}.`,            }
                 ])
             }
-            
-        }
+        }   
+
+            // var numNewLines = code.match(/\n/g)?.length || -1
+
+            // var newLineIndices: Number[] = [] 
+            // for (let i = 0; i < code.length; i++) {
+            //     if (code[i] === "\n") {
+            //         newLineIndices.push(i)
+            //     }
+            // }
+
+            // var firstNewLine = this.chunkHistory
+            // var lastNewLine = firstNewLine + chunkSize
+
+            // var chunkNotFound = true
+            // var chunkWriter = ""
+            // var nonChunkWriter = ""
+
+            // // TO DO: Will repeat the same chunk, need to remember which chunks have already been looked at
+            // while ((lastNewLine < numNewLines - 1) && chunkNotFound) {
+            //     var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
+            //     if (parseFloat(codePercentages[0]) >= 70) {
+            //         chunkWriter = participants[0].name
+            //         nonChunkWriter = participants[1].name
+            //         chunkNotFound = false
+            //     }
+            //     else if (parseFloat(codePercentages[1]) >= 70) {
+            //         chunkWriter = participants[1].name
+            //         nonChunkWriter = participants[0].name
+            //         chunkNotFound = false
+            //     } else {
+            //         firstNewLine = firstNewLine + 1
+            //         lastNewLine = lastNewLine + 1
+            //     }
+            // }            
     }
 
     async onRoleSwitch() {
@@ -264,7 +320,7 @@ export default class Bruno {
               [METRIC] Student A: 20% Conversation \n \
               [METRIC] Student B: 80% Conversation \n \
               \
-              You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags. Only assess the students once you have received these tagged messages.",
+              You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags.",
           });
           this.interventionSpecificMessages.push({
             role: "system",
