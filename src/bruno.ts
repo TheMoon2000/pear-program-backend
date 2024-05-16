@@ -47,7 +47,7 @@ export default class Bruno {
 
     // private introductionFlag: boolean
 
-    private participantNames: [number, number][] = []
+    private participantNames: string[] = ["",""]
 
     // private periodicFunctionStarted: boolean
 
@@ -508,15 +508,14 @@ export default class Bruno {
                     {type: "text", value: "Hi, I'm Bruno your pair programming facillitator. I'm here to help you get the most out of this session."}
                 ])
                 await sleep(3000)
-
                 
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
                     {type: "text", value: "Please allow video and audio access so you can communicate with your partner." } ])
-                await sleep(3000)
-
+                await sleep(1000)                
+                
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
