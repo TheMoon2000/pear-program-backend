@@ -284,10 +284,6 @@ export default class Bruno {
                 role2Metric = codePercentageB + "% Code Written"
 
                 fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), parseFloat(aTalkPercentage))
-                if (parseFloat(codePercentageB) < 70 || parseFloat(aTalkPercentage) < 70) {
-                    await this.send([
-                        {type: "text", value: `Driver B: ${parseFloat(codePercentageB)}     Navigator A: ${parseFloat(aTalkPercentage)}         \n\n\n${fulfilledRoles}`} ])
-                }
             }
 
             this.interventionSpecificMessages.push({
@@ -313,14 +309,21 @@ export default class Bruno {
 
             // await this.send([
                 // {type: "text", value: `Fulfilled Roles : ${fulfilledRoles === 1}` } ])
-            if (fulfilledRoles === 1)
+            if (fulfilledRoles == 1) {
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
                     {type: "text", value: "Great work. You should now switch roles using the switch roles button at the top of your screen." } ])
+            } else {
+                await this.sendTypingStatus(true)
+                await sleep(1000)
+                await this.sendTypingStatus(false)
+                await this.send([
+                    {type: "text", value: "You should try staying with these roles a little longer!" } ])
             }
             // this.numRoleSwitches = databaseNumSwitches
+        }
     }
 
     async talkTimeIntervention(){
@@ -396,9 +399,6 @@ export default class Bruno {
                 return ["0","0"]
             }
         }
-        await this.send([
-            {type: "text", value: `Code Percentage B: ${code}` } ])
-
 
         return [((code.match(/0/g) || "").length / code.length * 100).toFixed(2), ((code.match(/1/g) || "").length / code.length * 100).toFixed(2)]
     }
@@ -616,7 +616,7 @@ export default class Bruno {
 
             
             //DELETE LATER
-            // this.turnTakingIntervention()
+            this.turnTakingIntervention()
             // DELETE LATER
             
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
