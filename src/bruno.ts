@@ -94,7 +94,7 @@ export default class Bruno {
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
 
-    async intersubjectivityIntervention(participants: ParticipantInfo[]){
+    async intersubjectivityIntervention(){
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
 
         var chunkSize = 4
@@ -134,14 +134,18 @@ export default class Bruno {
                         // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
                     if (parseFloat(codePercentages[0]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
                             this.localAuthorMap.set(authorMapIndex, 0)  // Add this chunk to map w/ author = 0
-                            chunkWriter = participants[0].name
-                            nonChunkWriter = participants[1].name
+                            chunkWriter = this.participantData[0].name
+                            nonChunkWriter = this.participantData[1].name
+                            // chunkWriter = participants[0].name
+                            // nonChunkWriter = participants[1].name
                             chunkNotFound = false
                     }
                     else if (parseFloat(codePercentages[1]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
                             this.localAuthorMap.set(authorMapIndex, 1) // Add this chunk to map w/ author = 1
-                            chunkWriter = participants[1].name
-                            nonChunkWriter = participants[0].name
+                            chunkWriter = this.participantData[1].name
+                            nonChunkWriter = this.participantData[0].name
+                            // chunkWriter = participants[1].name
+                            // nonChunkWriter = participants[0].name
                             chunkNotFound = false
                     } else {
                         if (authorMapIndex in this.localAuthorMap) {  // If chunk already examined and has not changed
@@ -220,7 +224,7 @@ export default class Bruno {
         // Only runs if room condition is 1 (turn taking intervention room)
         if (this.condition === 1 && this.bothParticipantsOnline) { 
             clearInterval(this.periodicFunctionInstance)
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
         }
     }
 
@@ -232,17 +236,18 @@ export default class Bruno {
     properlyFulfilledRoles(driverCode: number, navigatorTalk: number) {
         var threshold = 70
         if (driverCode < threshold || navigatorTalk < threshold) {
-            return false
+            return 0
         }
-        return true
+        return 1
     }
 
     // Function only called when students haven't switched in the past 10 minutes
-    async turnTakingIntervention(participants: ParticipantInfo[]){
+    async turnTakingIntervention(){
         // var databaseNumSwitches = await this.getNumSwitches() 
         // var numSwitches = databaseNumSwitches - this.numRoleSwitches           
         
-        if (participants[0].role != 0 && participants[1].role != 0) {
+        if (this.participantData[0].role != 0 && this.participantData[1].role != 0) {
+        // if (participants[0].role != 0 && participants[1].role != 0) {
             var talkPercentages = await this.getConversationContribution()
             var aTalkPercentage = talkPercentages[0];
             var bTalkPercentage = talkPercentages[1];
@@ -252,8 +257,10 @@ export default class Bruno {
             var codePercentageB = codeContributions[1]
     
             var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
-            var fulfilledRoles = false
-            if (participants[0].role == 1) {
+            let fulfilledRoles = 0
+
+            if (this.participantData[0].role == 1) {
+            // if (participants[0].role == 1) {
                 role1 = "[DRIVER]"
                 role2 = "[NAVIGATOR]"
 
@@ -265,7 +272,8 @@ export default class Bruno {
 
                 fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), parseFloat(bTalkPercentage))
             }
-            else if (participants[0].role == 2) {
+            else if (this.participantData[0].role == 2) {
+            // else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
                 role2 = "[DRIVER]"
 
@@ -276,20 +284,24 @@ export default class Bruno {
                 role2Metric = codePercentageB + "% Code Written"
 
                 fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), parseFloat(aTalkPercentage))
+                if (parseFloat(codePercentageB) < 70 || parseFloat(aTalkPercentage) < 70) {
+                    await this.send([
+                        {type: "text", value: `Driver B: ${parseFloat(codePercentageB)}     Navigator A: ${parseFloat(aTalkPercentage)}         \n\n\n${fulfilledRoles}`} ])
+                }
             }
 
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: `${participants[0].name} has the ${role1} and therefore ${role1Goal}. ${participants[1].name} has the ${role2} role and therefore ${role2Goal}
-                          Evaluate ${participants[0].name} and ${participants[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
+                content: `${this.participantData[0].name} has the ${role1} and therefore ${role1Goal}. ${this.participantData[1].name} has the ${role2} role and therefore ${role2Goal}
+                          Evaluate ${this.participantData[0].name} and ${this.participantData[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
                           The students should NOT have a balanced workload.`,
               });
 
             //remove switching roles / hardcode
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}
-                          \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}`,
+                content: `[METRIC] ${role1} ${this.participantData[0].name}: ${role1Metric}
+                          \n[METRIC] ${role2} ${this.participantData[1].name}: ${role2Metric}`,
               });
             // await this.gpt();
 
@@ -298,7 +310,10 @@ export default class Bruno {
             this.interventionSpecificMessages.pop();
 
             // if (numSwitches < 1 && fulfilledRoles) {
-            if (fulfilledRoles)
+
+            // await this.send([
+                // {type: "text", value: `Fulfilled Roles : ${fulfilledRoles === 1}` } ])
+            if (fulfilledRoles === 1)
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
@@ -308,7 +323,7 @@ export default class Bruno {
             // this.numRoleSwitches = databaseNumSwitches
     }
 
-    async talkTimeIntervention(participants: ParticipantInfo[]){
+    async talkTimeIntervention(){
         var talkPercentages = await this.getConversationContribution()
         var aTalkPercentage = talkPercentages[0];
         var bTalkPercentage = talkPercentages[1];
@@ -324,8 +339,8 @@ export default class Bruno {
           });
           this.interventionSpecificMessages.push({
             role: "system",
-            content: `\n[METRIC] ${participants[0].name}: ${aTalkPercentage}% Contribution to Conversation
-                      \n[METRIC] ${participants[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
+            content: `\n[METRIC] ${this.participantData[0].name}: ${aTalkPercentage}% Contribution to Conversation
+                      \n[METRIC] ${this.participantData[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
           });
           // await this.gpt();
           await this.gptLimitedContext();
@@ -381,22 +396,26 @@ export default class Bruno {
                 return ["0","0"]
             }
         }
+        await this.send([
+            {type: "text", value: `Code Percentage B: ${code}` } ])
+
+
         return [((code.match(/0/g) || "").length / code.length * 100).toFixed(2), ((code.match(/1/g) || "").length / code.length * 100).toFixed(2)]
     }
     // Runs every 5 minutes
-    async periodicFunction(participants: ParticipantInfo[]) {
+    async periodicFunction() {
         if (this.condition === 0) {
-            await this.talkTimeIntervention(participants)
+            await this.talkTimeIntervention()
         //     await this.send([
         //         {type: "text", value: `Talk Time` } ])
         }
         else if (this.condition === 1) { 
-            await this.turnTakingIntervention(participants)             
+            await this.turnTakingIntervention()             
             // await this.send([
             //     {type: "text", value: `Turn Taking` } ])
             }
         else if (this.condition === 2) { 
-            await this.intersubjectivityIntervention(participants)
+            await this.intersubjectivityIntervention()
             // await this.send([
             //     {type: "text", value: `Intersubjectivity` } ])
         }
@@ -419,8 +438,9 @@ export default class Bruno {
                 await this.send([{ type: "text", value: completion.choices[0].message.content }]);
             }
         }
-        catch {
-
+        catch(e) {
+            // await this.send([
+            //     {type: "text", value: `${e}` } ])
         }
         // Maybe Delete
 
@@ -487,7 +507,9 @@ export default class Bruno {
                 conn.release()
 
                 this.participantNames[0] = participants[0].name
-                this.participantNames[1] = participants[1].name
+                this.participantNames[1] = participants[1].name + "2"
+
+                this.participantData[1].name = this.participantNames[1]
 
                 // this.brunoMessages.push({
                 //     role: "system",
@@ -498,7 +520,7 @@ export default class Bruno {
                 //INTERVENTION SPECIFIC
                 this.interventionSpecificMessages.push({
                     role: "system",
-                    content: `Both students, ${participants[0].name} and ${participants[1].name}, are currently working on their selected problem. Do not greet them.`,
+                    content: `Both students, ${participants[0].name} and ${this.participantData[1].name}, are currently working on their selected problem. Do not greet them.`,
                 });
 
                 await this.sendTypingStatus(true)
@@ -543,7 +565,7 @@ export default class Bruno {
 
             }
             else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
-                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
+                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
         }
@@ -555,7 +577,7 @@ export default class Bruno {
                 studentName = participants[0].name
             }
             else if (participants[1].isOnline !== true) {
-                studentName = participants[1].name
+                studentName = this.participantData[1].name
             }
             
             if (studentName !== ""){
@@ -592,6 +614,11 @@ export default class Bruno {
             const codeHistory = await getCodeHistoryOfRoom(this.roomId)
             console.log("Latest state of code:", codeHistory[codeHistory.length - 1])
 
+            
+            //DELETE LATER
+            // this.turnTakingIntervention()
+            // DELETE LATER
+            
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
             // this.brunoMessages.push({
             //     role: "user",
@@ -684,7 +711,7 @@ Need more guidance? Check out this document [link]" } ])
             await this.sendTypingStatus(false)
             await this.send([{type: "text", value: "Press the Run Code button in the top right corner to execute your program." } ])
 
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
 
             // this.brunoMessages.push({
             //     role: "system",
