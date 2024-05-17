@@ -505,7 +505,11 @@ export default class Bruno {
                     await makeQuery(conn, "UPDATE Participants SET name = ? WHERE room_id = ? AND user_email = ?", [participants[1].name + "2", this.roomId, participants[1].email])
                 }
                 conn.release()
-
+                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+                    [this.participantData[0].email]: 1,
+                    [this.participantData[1].email]: 2
+                } })
+                
                 this.participantNames[0] = participants[0].name
                 this.participantNames[1] = participants[1].name + "2"
 
@@ -663,10 +667,10 @@ Need more guidance? Check out this document [link]" } ])
                     {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
                 ])
 
-                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
-                    [this.participantData[0].email]: 1,
-                    [this.participantData[1].email]: 2
-                } })
+                // await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+                //     [this.participantData[0].email]: 1,
+                //     [this.participantData[1].email]: 2
+                // } })
 
             let conn = await getConnection()
             const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
