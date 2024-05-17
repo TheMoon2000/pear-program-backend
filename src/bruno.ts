@@ -616,7 +616,7 @@ export default class Bruno {
 
             
             //DELETE LATER
-            this.turnTakingIntervention()
+            // this.turnTakingIntervention()
             // DELETE LATER
             
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
