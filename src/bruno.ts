@@ -67,6 +67,39 @@ export default class Bruno {
                             \ Code in Place is now piloting a Pair Programming feature, where two students are paired up to work together on an assignment. As a mentor, your role is to guide these students through the pair programming process and help them work together. Your job also involves assessing the students' individual contributions to the assignment in terms of code written and involvement in conversations or brainstorming. You perform this assessment by looking at metrics provided to you by the shared coding environment the students are using. \n \
                             \ Do not number or label your messages. Do not break character or mention that you are an AI Language Model.";
 
+
+    private autograderSystemPrompt = `You are an expert grader from Stanford University who is grading students in a open access intro python course. 
+    Please grade this student's work and return the grade in a JSON of this format:
+    {
+    "score": an integer from 0-10,
+    "feedback": [
+        {
+            "error":,
+            "how_to_fix":,
+            "rank":,
+        },
+        {
+            "error":,
+            "how_to_fix":,
+            "rank":,
+        }
+    ]
+    }
+    You will be given a description of the question, the starter code, a student's code and a few expert graded examples. 
+    In your output JSON, you should assign the student a score from 0-10, with 10 being perfect. 
+    In the "feedback" section of the JSON, list all errors that you find with the code. Ignore comments that contain "TODO".
+    Format each error as an individual JSON object as above.
+    Rank the errors by severity, with the highest number being the most severe impact to the functionality. 
+    In a friendly, helpful manner, suggest how to fix each error.  
+
+    Do not give feedback on style unless the score is perfect and the code is functional. 
+    
+    Many assignments will have constants, often in all caps camel case such as CANVAS_WIDTH. DO NOT DEDUCT FROM THEIR SCORE IF THEY CHANGE THESE CONSTANTS. That is fine, and normal.
+
+    Graphics programs are written in a library that is a subclass off of tkinter. Importantly it does not require graphics.mainloop() to be called.
+    
+    Grade generously. Be much more concerned about conceptual mistakes, rather than small details.`                            
+
     private localAuthorMap: Map<number, number> = new Map<number, number>();
   
     /**
@@ -94,7 +127,7 @@ export default class Bruno {
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
     }
 
-    async intersubjectivityIntervention(){
+    async intersubjectivityIntervention(participants: ParticipantInfo[]){
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
 
         var chunkSize = 4
@@ -134,18 +167,14 @@ export default class Bruno {
                         // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
                     if (parseFloat(codePercentages[0]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
                             this.localAuthorMap.set(authorMapIndex, 0)  // Add this chunk to map w/ author = 0
-                            chunkWriter = this.participantData[0].name
-                            nonChunkWriter = this.participantData[1].name
-                            // chunkWriter = participants[0].name
-                            // nonChunkWriter = participants[1].name
+                            chunkWriter = participants[0].name
+                            nonChunkWriter = participants[1].name
                             chunkNotFound = false
                     }
                     else if (parseFloat(codePercentages[1]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
                             this.localAuthorMap.set(authorMapIndex, 1) // Add this chunk to map w/ author = 1
-                            chunkWriter = this.participantData[1].name
-                            nonChunkWriter = this.participantData[0].name
-                            // chunkWriter = participants[1].name
-                            // nonChunkWriter = participants[0].name
+                            chunkWriter = participants[1].name
+                            nonChunkWriter = participants[0].name
                             chunkNotFound = false
                     } else {
                         if (authorMapIndex in this.localAuthorMap) {  // If chunk already examined and has not changed
@@ -224,7 +253,7 @@ export default class Bruno {
         // Only runs if room condition is 1 (turn taking intervention room)
         if (this.condition === 1 && this.bothParticipantsOnline) { 
             clearInterval(this.periodicFunctionInstance)
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
         }
     }
 
@@ -236,18 +265,17 @@ export default class Bruno {
     properlyFulfilledRoles(driverCode: number, navigatorTalk: number) {
         var threshold = 70
         if (driverCode < threshold || navigatorTalk < threshold) {
-            return 0
+            return false
         }
-        return 1
+        return true
     }
 
     // Function only called when students haven't switched in the past 10 minutes
-    async turnTakingIntervention(){
+    async turnTakingIntervention(participants: ParticipantInfo[]){
         // var databaseNumSwitches = await this.getNumSwitches() 
         // var numSwitches = databaseNumSwitches - this.numRoleSwitches           
         
-        if (this.participantData[0].role != 0 && this.participantData[1].role != 0) {
-        // if (participants[0].role != 0 && participants[1].role != 0) {
+        if (participants[0].role != 0 && participants[1].role != 0) {
             var talkPercentages = await this.getConversationContribution()
             var aTalkPercentage = talkPercentages[0];
             var bTalkPercentage = talkPercentages[1];
@@ -257,10 +285,8 @@ export default class Bruno {
             var codePercentageB = codeContributions[1]
     
             var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
-            let fulfilledRoles = 0
-
-            if (this.participantData[0].role == 1) {
-            // if (participants[0].role == 1) {
+            var fulfilledRoles = false
+            if (participants[0].role == 1) {
                 role1 = "[DRIVER]"
                 role2 = "[NAVIGATOR]"
 
@@ -272,8 +298,7 @@ export default class Bruno {
 
                 fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), parseFloat(bTalkPercentage))
             }
-            else if (this.participantData[0].role == 2) {
-            // else if (participants[0].role == 2) {
+            else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
                 role2 = "[DRIVER]"
 
@@ -288,16 +313,16 @@ export default class Bruno {
 
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: `${this.participantData[0].name} has the ${role1} and therefore ${role1Goal}. ${this.participantData[1].name} has the ${role2} role and therefore ${role2Goal}
-                          Evaluate ${this.participantData[0].name} and ${this.participantData[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
+                content: `${participants[0].name} has the ${role1} and therefore ${role1Goal}. ${participants[1].name} has the ${role2} role and therefore ${role2Goal}
+                          Evaluate ${participants[0].name} and ${participants[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
                           The students should NOT have a balanced workload.`,
               });
 
             //remove switching roles / hardcode
             this.interventionSpecificMessages.push({
                 role: "system",
-                content: `[METRIC] ${role1} ${this.participantData[0].name}: ${role1Metric}
-                          \n[METRIC] ${role2} ${this.participantData[1].name}: ${role2Metric}`,
+                content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}
+                          \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}`,
               });
             // await this.gpt();
 
@@ -306,27 +331,17 @@ export default class Bruno {
             this.interventionSpecificMessages.pop();
 
             // if (numSwitches < 1 && fulfilledRoles) {
-
-            // await this.send([
-                // {type: "text", value: `Fulfilled Roles : ${fulfilledRoles === 1}` } ])
-            if (fulfilledRoles == 1) {
+            if (fulfilledRoles)
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
                     {type: "text", value: "Great work. You should now switch roles using the switch roles button at the top of your screen." } ])
-            } else {
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "You should try staying with these roles a little longer!" } ])
             }
             // this.numRoleSwitches = databaseNumSwitches
-        }
     }
 
-    async talkTimeIntervention(){
+    async talkTimeIntervention(participants: ParticipantInfo[]){
         var talkPercentages = await this.getConversationContribution()
         var aTalkPercentage = talkPercentages[0];
         var bTalkPercentage = talkPercentages[1];
@@ -342,8 +357,8 @@ export default class Bruno {
           });
           this.interventionSpecificMessages.push({
             role: "system",
-            content: `\n[METRIC] ${this.participantData[0].name}: ${aTalkPercentage}% Contribution to Conversation
-                      \n[METRIC] ${this.participantData[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
+            content: `\n[METRIC] ${participants[0].name}: ${aTalkPercentage}% Contribution to Conversation
+                      \n[METRIC] ${participants[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
           });
           // await this.gpt();
           await this.gptLimitedContext();
@@ -399,25 +414,24 @@ export default class Bruno {
                 return ["0","0"]
             }
         }
-
         return [((code.match(/0/g) || "").length / code.length * 100).toFixed(2), ((code.match(/1/g) || "").length / code.length * 100).toFixed(2)]
     }
     // Runs every 5 minutes
-    async periodicFunction() {
+    async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition === 0) {
-            await this.talkTimeIntervention()
-        //     await this.send([
-        //         {type: "text", value: `Talk Time` } ])
+            await this.talkTimeIntervention(participants)
+            await this.send([
+                {type: "text", value: `Talk Time` } ])
         }
         else if (this.condition === 1) { 
-            await this.turnTakingIntervention()             
-            // await this.send([
-            //     {type: "text", value: `Turn Taking` } ])
+            await this.turnTakingIntervention(participants)             
+            await this.send([
+                {type: "text", value: `Turn Taking` } ])
             }
         else if (this.condition === 2) { 
-            await this.intersubjectivityIntervention()
-            // await this.send([
-            //     {type: "text", value: `Intersubjectivity` } ])
+            await this.intersubjectivityIntervention(participants)
+            await this.send([
+                {type: "text", value: `Intersubjectivity` } ])
         }
     }
 
@@ -438,9 +452,8 @@ export default class Bruno {
                 await this.send([{ type: "text", value: completion.choices[0].message.content }]);
             }
         }
-        catch(e) {
-            // await this.send([
-            //     {type: "text", value: `${e}` } ])
+        catch {
+
         }
         // Maybe Delete
 
@@ -476,6 +489,67 @@ export default class Bruno {
     // }
 
 
+
+    async composeAiGraderMessages() {
+        const conn = await getConnection() 
+        if (this.roomId != null) {
+            console.warn("Selected roomId not found")
+        }
+        else {
+            const [snapshot] = await makeQuery(conn, `SELECT code, question_id FROM Rooms WHERE room_id = ?`, [this.roomId])
+            if (snapshot.length === 0) {
+                console.warn("Selected snapshout not found")
+            } 
+            else {
+                let code = snapshot[0].code
+                let questionId = snapshot[0].question_id 
+                const [testCase] = await makeQuery(conn, "SELECT * from TestCases WHERE question_id = ?", [questionId])
+                conn.release()
+
+                if (testCase.length === 0) {
+                    console.warn("Selected test case not found")
+                } else {
+                    const starterCode = testCase[0].starter_code
+                    const description = testCase[0].description
+
+                    let graderMessages: ChatCompletionMessageParam[] = [];
+                    graderMessages.push({
+                        "role": "system",
+                        "content": this.autograderSystemPrompt
+                    })
+                    graderMessages.push({
+                        "role": "system",
+                        "content": `Problem Description: ${description}`
+                    })
+                    graderMessages.push({
+                        "role": "system",
+                        "content": `Starter Code: ${starterCode}`
+                    })
+                    graderMessages.push({
+                        "role": "system",
+                        "content": `Student Code: ${code}`
+                    })
+
+                    try {
+                        const completion = await this.openai.chat.completions.create({
+                        messages: graderMessages,
+                        model: "gpt-3.5-turbo",
+                        });
+            
+                        await this.sendTypingStatus(true);
+                        await sleep(1000);
+                        await this.sendTypingStatus(false);
+            
+                        if (completion.choices[0].message.content != null ) {
+                            await this.send([{ type: "text", value: completion.choices[0].message.content }]);
+                        }
+                    }
+                    catch {}
+                }
+            }
+        }
+    }
+
     //If someone refreshes before "take a moment to introduce yourself" is done
     async onParticipantsUpdated(participants: ParticipantInfo[]) {
         console.log(`Room ${this.roomId} received updated participant list`, participants)
@@ -505,15 +579,9 @@ export default class Bruno {
                     await makeQuery(conn, "UPDATE Participants SET name = ? WHERE room_id = ? AND user_email = ?", [participants[1].name + "2", this.roomId, participants[1].email])
                 }
                 conn.release()
-                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
-                    [this.participantData[0].email]: 1,
-                    [this.participantData[1].email]: 2
-                } })
-                
-                this.participantNames[0] = participants[0].name
-                this.participantNames[1] = participants[1].name + "2"
 
-                this.participantData[1].name = this.participantNames[1]
+                this.participantNames[0] = participants[0].name
+                this.participantNames[1] = participants[1].name
 
                 // this.brunoMessages.push({
                 //     role: "system",
@@ -524,7 +592,7 @@ export default class Bruno {
                 //INTERVENTION SPECIFIC
                 this.interventionSpecificMessages.push({
                     role: "system",
-                    content: `Both students, ${participants[0].name} and ${this.participantData[1].name}, are currently working on their selected problem. Do not greet them.`,
+                    content: `Both students, ${participants[0].name} and ${participants[1].name}, are currently working on their selected problem. Do not greet them.`,
                 });
 
                 await this.sendTypingStatus(true)
@@ -569,7 +637,7 @@ export default class Bruno {
 
             }
             else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
-                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
+                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
         }
@@ -581,7 +649,7 @@ export default class Bruno {
                 studentName = participants[0].name
             }
             else if (participants[1].isOnline !== true) {
-                studentName = this.participantData[1].name
+                studentName = participants[1].name
             }
             
             if (studentName !== ""){
@@ -618,11 +686,6 @@ export default class Bruno {
             const codeHistory = await getCodeHistoryOfRoom(this.roomId)
             console.log("Latest state of code:", codeHistory[codeHistory.length - 1])
 
-            
-            //DELETE LATER
-            // this.turnTakingIntervention()
-            // DELETE LATER
-            
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
             // this.brunoMessages.push({
             //     role: "user",
@@ -667,10 +730,10 @@ Need more guidance? Check out this document [link]" } ])
                     {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
                 ])
 
-                // await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
-                //     [this.participantData[0].email]: 1,
-                //     [this.participantData[1].email]: 2
-                // } })
+                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+                    [this.participantData[0].email]: 1,
+                    [this.participantData[1].email]: 2
+                } })
 
             let conn = await getConnection()
             const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
@@ -715,7 +778,7 @@ Need more guidance? Check out this document [link]" } ])
             await this.sendTypingStatus(false)
             await this.send([{type: "text", value: "Press the Run Code button in the top right corner to execute your program." } ])
 
-            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(), this.periodLength * 60 * 1000)
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
 
             // this.brunoMessages.push({
             //     role: "system",
