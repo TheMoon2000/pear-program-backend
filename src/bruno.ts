@@ -478,7 +478,7 @@ export default class Bruno {
 
     //If someone refreshes before "take a moment to introduce yourself" is done
     async onParticipantsUpdated(participants: ParticipantInfo[]) {
-        console.log(`Room ${this.roomId} received updated participant list`, participants)
+        console.log(`Room ${this.roomId} received updated participant list`, participants.map(p => p.email))
         console.log("Current chat history length:", this.currentChatHistory.length)
 
         this.participantData = JSON.parse(JSON.stringify(participants));
@@ -653,14 +653,17 @@ export default class Bruno {
             await this.sendTypingStatus(false)
             await this.send([
                 {type: "text", 
-                value: "Heres how to pair program: \n\n\
-There are two roles in pair programming: \n\n\
-  - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.\n\
-  - **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.\n\n\
-**Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.\n\n\
-**Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.\n\n\
-**Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.\n\n\
-Need more guidance? Check out this document [link]" } ])
+                value: `Heres how to pair program:
+
+There are two roles in pair programming:
+- **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.
+- **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.
+
+**Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.
+
+**Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.
+
+**Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.` } ])
             await sleep(5000)
 
             await this.send([

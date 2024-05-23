@@ -6,7 +6,7 @@ import axios from "axios";
 import { v4 } from "uuid";
 import { makeQuery, getConnection } from "../utils/database";
 import { PoolConnection } from "mysql2/promise";
-import { sendNotificationToRoom, sendEventOfType, socketMap } from "../chat";
+import { sendNotificationToRoom, sendEventOfType, socketMap, roomMembershipSemaphore } from "../chat";
 import { WebSocket } from "ws";
 
 
@@ -201,100 +201,109 @@ roomRouter.post("/", async (req, res) => {
         /* In either case, register the user first */
         await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW(3)", [userEmail, username, username])
 
-        const [mostRecentRoom] = await makeQuery(conn, "SELECT Rooms.id, Rooms.dyte_meeting_id, SUM(Participants.is_online >= 1) AS online_count, JSON_ARRAYAGG(Participants.user_email) as email_list FROM Rooms INNER JOIN Participants ON Rooms.id = Participants.room_id GROUP BY 1,2 ORDER BY creation_date DESC LIMIT 1")
-        console.log(mostRecentRoom)
-
-        // Case 1: user has been waiting by themselves alone in a room. Get them there
-        if (mostRecentRoom.length > 0 && mostRecentRoom[0].email_list.length === 1 && mostRecentRoom[0].email_list[0] === userEmail) {
-            console.log(`Directing ${userEmail} to the room they opened themselves (${mostRecentRoom[0].id})`)
-            return res.json({
-                room_id: mostRecentRoom[0].id,
-                is_new_room: false,
-                already_in_room: true
-            })
-        // Case 2: another user is online and waiting by themselves in a room (hence email_list.length == 1). Assign this user to the room.
-        } else if (mostRecentRoom.length > 0 && Number(mostRecentRoom[0].online_count) === 1 && mostRecentRoom[0].email_list.length === 1) {
-            console.log(`Assigning ${userEmail} to available room with ${mostRecentRoom[0].email_list[0]}`)
-
-            // Insert participant into dyte meeting
-            const insertionResponse = await dyteInstance.post(`/meetings/${mostRecentRoom[0].dyte_meeting_id}/participants`, {
-                preset_name: "group_call_participant",
-                custom_participant_id: userEmail,
-                name: username
-            }).then(r => r.data)
-
-            const [insertParticipantResult] = await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [mostRecentRoom[0].id, userEmail, insertionResponse.data.token, insertionResponse.data.id])
-
-            /* Update room to full */
-            await makeQuery(conn, "UPDATE Rooms SET is_full = 1 WHERE id = ?", [mostRecentRoom[0].id])
-
-            return res.json({
-                room_id: mostRecentRoom[0].id,
-                is_new_room: false,
-                already_in_room: false
-            })
-        }
-
+        console.log("take", roomMembershipSemaphore)
+        roomMembershipSemaphore.take(() => {
+            (async () => {
+                const [mostRecentRoom] = await makeQuery(conn, "SELECT Rooms.id, Rooms.dyte_meeting_id, SUM(Participants.is_online >= 1) AS online_count, JSON_ARRAYAGG(Participants.user_email) as email_list FROM Rooms INNER JOIN Participants ON Rooms.id = Participants.room_id GROUP BY 1,2 ORDER BY creation_date DESC LIMIT 1")
+                console.log(mostRecentRoom)
         
-        const sessionId = v4().replace(/-/g, "");
-        console.log("Creating new room with id", sessionId)
-
-        // Create user
-        await execAsync(`docker exec env useradd ${sessionId}`)
-        await execAsync(`docker exec env mkdir /home/${sessionId}`)
-        await execAsync(`docker exec env chown ${sessionId}:${sessionId} /home/${sessionId}`)
-        await execAsync(`docker exec env chmod 700 /home/${sessionId}`)
-
-        await hubInstance.post(`/users/${sessionId}`)
-
-        // Create token
-        const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`).then(r => r.data)
-
-        // Count the number of existing rooms
-        const [roomCount] = await makeQuery(conn, "SELECT COUNT(id) as count FROM Rooms")
-        const condition = roomCount[0].count % 5
+                // Case 1: user has been waiting by themselves alone in a room. Get them there
+                if (mostRecentRoom.length > 0 && mostRecentRoom[0].email_list.length === 1 && mostRecentRoom[0].email_list[0] === userEmail) {
+                    console.log(`Directing ${userEmail} to the room they opened themselves (${mostRecentRoom[0].id})`)
+                    return res.json({
+                        room_id: mostRecentRoom[0].id,
+                        is_new_room: false,
+                        already_in_room: true
+                    })
+                // Case 2: another user is online and waiting by themselves in a room (hence email_list.length == 1). Assign this user to the room.
+                } else if (mostRecentRoom.length > 0 && Number(mostRecentRoom[0].online_count) === 1 && mostRecentRoom[0].email_list.length === 1) {
+                    console.log(`Assigning ${userEmail} to available room with ${mostRecentRoom[0].email_list[0]}`)
         
-        // Create Dyte meeting
-        const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
-        const meetingId = createMeetingResponse.data.id
-
-        const initialCode = `print("Hello world!")`
-        const initialAuthorMap = initialCode.replace(/[^\n]/g, "?")
-        await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token, `condition`) VALUES (?, ?, ?, ?, ?, ?)", [sessionId, initialCode, initialAuthorMap, meetingId, userToken, condition])
-
-        // Insert participant into dyte meeting
-        const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
-            preset_name: "group_call_participant",
-            custom_participant_id: userEmail,
-            name: username
-        }).then(r => r.data)
-
-        await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
-
-        // Insert starter code into rustpad
-        console.log(await new Promise<any>((r, _) => {
-            const roomWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}`)
-            roomWs.once("open", () => {
-                roomWs.send(JSON.stringify({
-                    Edit: { revision: 0, operation: [initialCode] }
-                }), r)
-            })
-        }))
-
-        await new Promise<any>((r, _) => {
-            const authorWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}-authors`)
-            authorWs.once("open", () => {
-                authorWs.send(JSON.stringify({
-                    Edit: { revision: 0, operation: [initialAuthorMap] }
-                }), r)
+                    // Insert participant into dyte meeting
+                    const insertionResponse = await dyteInstance.post(`/meetings/${mostRecentRoom[0].dyte_meeting_id}/participants`, {
+                        preset_name: "group_call_participant",
+                        custom_participant_id: userEmail,
+                        name: username
+                    }).then(r => r.data)
+        
+                    const [insertParticipantResult] = await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id) VALUES (?, ?, ?, ?)", [mostRecentRoom[0].id, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+        
+                    /* Update room to full */
+                    await makeQuery(conn, "UPDATE Rooms SET is_full = 1 WHERE id = ?", [mostRecentRoom[0].id])
+        
+                    return res.json({
+                        room_id: mostRecentRoom[0].id,
+                        is_new_room: false,
+                        already_in_room: false
+                    })
+                }
+        
+                
+                const sessionId = v4().replace(/-/g, "");
+                console.log("Creating new room with id", sessionId)
+        
+                // Create user
+                await execAsync(`docker exec env useradd ${sessionId}`)
+                await execAsync(`docker exec env mkdir /home/${sessionId}`)
+                await execAsync(`docker exec env chown ${sessionId}:${sessionId} /home/${sessionId}`)
+                await execAsync(`docker exec env chmod 700 /home/${sessionId}`)
+        
+                await hubInstance.post(`/users/${sessionId}`)
+        
+                // Create token
+                const { token: userToken } = await hubInstance.post(`/users/${sessionId}/tokens`).then(r => r.data)
+        
+                // Count the number of existing rooms
+                const [roomCount] = await makeQuery(conn, "SELECT COUNT(id) as count FROM Rooms")
+                const condition = roomCount[0].count % 5
+                
+                // Create Dyte meeting
+                const createMeetingResponse = await dyteInstance.post("/meetings").then(r => r.data)
+                const meetingId = createMeetingResponse.data.id
+        
+                const initialCode = `print("Hello world!")`
+                const initialAuthorMap = initialCode.replace(/[^\n]/g, "?")
+                await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, dyte_meeting_id, jupyter_server_token, `condition`) VALUES (?, ?, ?, ?, ?, ?)", [sessionId, initialCode, initialAuthorMap, meetingId, userToken, condition])
+        
+                // Insert participant into dyte meeting
+                const insertionResponse = await dyteInstance.post(`/meetings/${meetingId}/participants`, {
+                    preset_name: "group_call_participant",
+                    custom_participant_id: userEmail,
+                    name: username
+                }).then(r => r.data)
+        
+                await makeQuery(conn, "INSERT INTO Participants (room_id, user_email, dyte_token, dyte_participant_id, is_online) VALUES (?, ?, ?, ?, 1)", [sessionId, userEmail, insertionResponse.data.token, insertionResponse.data.id])
+        
+                // Insert starter code into rustpad
+                console.log(await new Promise<any>((r, _) => {
+                    const roomWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}`)
+                    roomWs.once("open", () => {
+                        roomWs.send(JSON.stringify({
+                            Edit: { revision: 0, operation: [initialCode] }
+                        }), r)
+                    })
+                }))
+        
+                await new Promise<any>((r, _) => {
+                    const authorWs = new WebSocket(`wss://rustpad.io/api/socket/${sessionId}-authors`)
+                    authorWs.once("open", () => {
+                        authorWs.send(JSON.stringify({
+                            Edit: { revision: 0, operation: [initialAuthorMap] }
+                        }), r)
+                    })
+                })
+        
+                res.json({
+                    room_id: sessionId,
+                    existing: false,
+                    already_in_room: false
+                })
+            })().finally(() => {
+                roomMembershipSemaphore.leave()
+                console.log("release", roomMembershipSemaphore)
             })
         })
 
-        res.json({
-            room_id: sessionId,
-            existing: false,
-            already_in_room: false
-        })
     } catch (error) {
         console.warn(error)
         res.sendStatus(400)
