@@ -116,9 +116,29 @@ roomRouter.get("/:room_id", async(req, res) => {
         const authorHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}-authors`)
         if (rustpadHistory.data) {
             room[0].rustpad_code = rustpadHistory.data
+        } else {
+            // Insert starter code into rustpad
+            console.log(await new Promise<any>((r, _) => {
+                const roomWs = new WebSocket(`wss://rustpad.io/api/socket/${req.params.room_id}`)
+                roomWs.once("open", () => {
+                    roomWs.send(JSON.stringify({
+                        Edit: { revision: 0, operation: [room[0].code] }
+                    }), r)
+                })
+            }))
         }
+
         if (authorHistory.data) {
             room[0].rustpad_author_map = authorHistory.data
+        } else {
+            await new Promise<any>((r, _) => {
+                const authorWs = new WebSocket(`wss://rustpad.io/api/socket/${req.params.room_id}-authors`)
+                authorWs.once("open", () => {
+                    authorWs.send(JSON.stringify({
+                        Edit: { revision: 0, operation: [room[0].author_map] }
+                    }), r)
+                })
+            })
         }
         
         // Check if a server is opened
@@ -158,7 +178,7 @@ roomRouter.get("/:room_id", async(req, res) => {
             }
         })   
         
-        makeQuery(conn, "UPDATE Participants SET last_visited = NOW() WHERE room_id = ? AND user_email = ?", [req.params.room_id, email])
+        await makeQuery(conn, "UPDATE Participants SET last_visited = NOW() WHERE room_id = ? AND user_email = ?", [req.params.room_id, email])
         
         res.status(200).json({
             room: room[0],

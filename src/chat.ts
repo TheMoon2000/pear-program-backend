@@ -143,7 +143,7 @@ chatServer.on("connection", (ws, request) => {
                         }
                     }
                 })
-                sql("UPDATE Participants SET is_online = greatest(is_online, 1) WHERE room_id = ? AND user_email = ?", [roomId, email]).catch(err => {
+                sql("UPDATE Participants SET is_online = ? WHERE room_id = ? AND user_email = ?", [members.get(email)?.count ?? 1, roomId, email]).catch(err => {
                     console.error(err)
                 }).finally(() => {
                     roomMembershipSemaphore.leave()
