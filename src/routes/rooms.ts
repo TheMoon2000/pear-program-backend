@@ -696,6 +696,19 @@ roomRouter.post("/:room_id/notification", async (req, res) => {
     }
 })
 
+roomRouter.post("/:room_id/grade", async (req, res) => {
+    let bruno = socketMap.get(req.params.room_id)?.ai
+    if (bruno) {
+        await bruno.composeAiGraderMessages().catch(err => {
+            console.warn(err)
+            res.status(400).send()
+        })
+        res.send()
+    } else {
+        res.status(400).send()
+    }
+})
+
 // Internal use
 export async function getCodeHistoryOfRoom(roomId: string): Promise<Snapshot[]> {
     const conn = await getConnection()

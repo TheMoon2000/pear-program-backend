@@ -491,15 +491,20 @@ export default class Bruno {
 
 
     async composeAiGraderMessages() {
-        const conn = await getConnection() 
-        if (this.roomId != null) {
+
+        if (this.roomId.length === 0) {
             console.warn("Selected roomId not found")
         }
         else {
-            const [snapshot] = await makeQuery(conn, `SELECT code, question_id FROM Rooms WHERE room_id = ?`, [this.roomId])
+            const conn = await getConnection() 
+            const [snapshot] = await makeQuery(conn, `SELECT code, question_id FROM Rooms WHERE room_id = ?`, [this.roomId])            
+            await this.send([{ type: "text", value: "snapshotWork" }]);
             if (snapshot.length === 0) {
-                console.warn("Selected snapshout not found")
+                console.warn("Selected snapshot not found")
+                await this.send([{ type: "text", value: "snapshot" }]);
+                conn.release()
             } 
+
             else {
                 let code = snapshot[0].code
                 let questionId = snapshot[0].question_id 
@@ -508,7 +513,10 @@ export default class Bruno {
 
                 if (testCase.length === 0) {
                     console.warn("Selected test case not found")
+                    await this.send([{ type: "text", value: "testCase" }]);
                 } else {
+                    await this.send([{ type: "text", value: "gpt" }]);
+
                     const starterCode = testCase[0].starter_code
                     const description = testCase[0].description
 
@@ -531,6 +539,7 @@ export default class Bruno {
                     })
 
                     try {
+
                         const completion = await this.openai.chat.completions.create({
                         messages: graderMessages,
                         model: "gpt-3.5-turbo",
@@ -543,8 +552,13 @@ export default class Bruno {
                         if (completion.choices[0].message.content != null ) {
                             await this.send([{ type: "text", value: completion.choices[0].message.content }]);
                         }
+
                     }
-                    catch {}
+                    catch (err) {
+                        console.warn(err)
+                        
+                        await this.send([{ type: "text", value: "I can't grade you right now due to an unexpected server issue. Please try again later." }])
+                    }
                 }
             }
         }
@@ -685,6 +699,9 @@ export default class Bruno {
         if (eventType === "send_text") {
             const codeHistory = await getCodeHistoryOfRoom(this.roomId)
             console.log("Latest state of code:", codeHistory[codeHistory.length - 1])
+
+
+            await this.composeAiGraderMessages()
 
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
             // this.brunoMessages.push({
