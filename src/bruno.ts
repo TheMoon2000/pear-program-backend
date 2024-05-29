@@ -85,7 +85,7 @@ export default class Bruno {
         }
     ]
     }
-    You will be given a description of the question, the starter code, a student's code and a few expert graded examples. 
+    You will be given a description of the question, the starter code, a student's code and a few expert graded examples. Output ONLY the JSON.
     In your output JSON, you should assign the student a score from 0-10, with 10 being perfect. 
     In the "feedback" section of the JSON, list all errors that you find with the code. Ignore comments that contain "TODO".
     Format each error as an individual JSON object as above.
@@ -420,18 +420,18 @@ export default class Bruno {
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
-            await this.send([
-                {type: "text", value: `Talk Time` } ])
+            // await this.send([
+            //     {type: "text", value: `Talk Time` } ])
         }
         else if (this.condition === 1) { 
             await this.turnTakingIntervention(participants)             
-            await this.send([
-                {type: "text", value: `Turn Taking` } ])
+            // await this.send([
+            //     {type: "text", value: `Turn Taking` } ])
             }
         else if (this.condition === 2) { 
             await this.intersubjectivityIntervention(participants)
-            await this.send([
-                {type: "text", value: `Intersubjectivity` } ])
+            // await this.send([
+            //     {type: "text", value: `Intersubjectivity` } ])
         }
     }
 
@@ -494,72 +494,79 @@ export default class Bruno {
 
         if (this.roomId.length === 0) {
             console.warn("Selected roomId not found")
+            return
         }
-        else {
-            const conn = await getConnection() 
-            const [snapshot] = await makeQuery(conn, `SELECT code, question_id FROM Rooms WHERE room_id = ?`, [this.roomId])            
-            await this.send([{ type: "text", value: "snapshotWork" }]);
-            if (snapshot.length === 0) {
-                console.warn("Selected snapshot not found")
-                await this.send([{ type: "text", value: "snapshot" }]);
-                conn.release()
-            } 
 
-            else {
-                let code = snapshot[0].code
-                let questionId = snapshot[0].question_id 
-                const [testCase] = await makeQuery(conn, "SELECT * from TestCases WHERE question_id = ?", [questionId])
-                conn.release()
+        const conn = await getConnection() 
+        const [snapshot] = await makeQuery(conn, `SELECT code, question_id FROM Rooms WHERE id = ?`, [this.roomId])            
+        if (snapshot.length === 0) {
+            console.warn("Selected snapshot not found")
+            await this.send([{ type: "text", value: "I don't see that you've written any code yet!" }]);
+            conn.release()
+            return
+        } 
 
-                if (testCase.length === 0) {
-                    console.warn("Selected test case not found")
-                    await this.send([{ type: "text", value: "testCase" }]);
-                } else {
-                    await this.send([{ type: "text", value: "gpt" }]);
+        let code = snapshot[0].code
+        let questionId = snapshot[0].question_id 
+        const [testCase] = await makeQuery(conn, "SELECT * from TestCases WHERE question_id = ?", [questionId])
+        conn.release()
 
-                    const starterCode = testCase[0].starter_code
-                    const description = testCase[0].description
+        console.log('composing chatgpt assessment for', testCase)
 
-                    let graderMessages: ChatCompletionMessageParam[] = [];
-                    graderMessages.push({
-                        "role": "system",
-                        "content": this.autograderSystemPrompt
-                    })
-                    graderMessages.push({
-                        "role": "system",
-                        "content": `Problem Description: ${description}`
-                    })
-                    graderMessages.push({
-                        "role": "system",
-                        "content": `Starter Code: ${starterCode}`
-                    })
-                    graderMessages.push({
-                        "role": "system",
-                        "content": `Student Code: ${code}`
-                    })
+        if (testCase.length === 0) {
+            console.warn("Selected test case not found")
+        } else {
 
-                    try {
+            const starterCode = testCase[0].starter_code
+            const description = testCase[0].description
 
-                        const completion = await this.openai.chat.completions.create({
-                        messages: graderMessages,
-                        model: "gpt-3.5-turbo",
-                        });
-            
-                        await this.sendTypingStatus(true);
-                        await sleep(1000);
-                        await this.sendTypingStatus(false);
-            
-                        if (completion.choices[0].message.content != null ) {
-                            await this.send([{ type: "text", value: completion.choices[0].message.content }]);
-                        }
+            let graderMessages: ChatCompletionMessageParam[] = [];
+            graderMessages.push({
+                "role": "system",
+                "content": this.autograderSystemPrompt
+            })
+            graderMessages.push({
+                "role": "system",
+                "content": `Problem Description: ${description}`
+            })
+            graderMessages.push({
+                "role": "system",
+                "content": `Starter Code: ${starterCode}`
+            })
+            graderMessages.push({
+                "role": "system",
+                "content": `Student Code: ${code}`
+            })
 
-                    }
-                    catch (err) {
-                        console.warn(err)
-                        
-                        await this.send([{ type: "text", value: "I can't grade you right now due to an unexpected server issue. Please try again later." }])
+            try {
+
+                const completion = await this.openai.chat.completions.create({
+                messages: graderMessages,
+                model: "gpt-3.5-turbo",
+                });
+    
+                await this.sendTypingStatus(true);
+                await sleep(1000);
+                await this.sendTypingStatus(false);
+                if (completion.choices[0].message.content != null ) {
+                    console.log('raw gpt message', completion.choices[0].message.content)
+                    const json = JSON.parse(completion.choices[0].message.content)
+                    if (json.score === 10) {
+                        // await this.send([{ type: "text", value: json.feedback }]);
+                        this.onQuestionPassed(questionId, testCase[0].title, [])
+                    } else {
+                        await this.send([{
+                            type: "text",
+                            value: json.feedback.length === 1 ? `Almost there! Here's the main issue with the code and how to fix it:\n- **${json.feedback[0].error.replace(/\.$/, "")}**: ${json.feedback[0].how_to_fix}` : `Good try! Here are the remaining issues with the code right now, and how to fix them:\n${json.feedback.map((f: any) => `- **${f.error.replace(/\.$/, "")}**: ${f.how_to_fix}`).join("\n")}`
+                        }])
                     }
                 }
+
+            }
+            catch (err) {
+                console.warn(err)
+                
+                await this.send([{ type: "text", value: "I can't grade you right now due to an unexpected server issue. Please try again later." }])
             }
         }
     }
@@ -621,25 +628,24 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Please allow video and audio access so you can communicate with your partner." } ])
-                await sleep(1000)                
+                    {type: "text", value: "Please allow video and audio access in your browser so you can communicate with your partner." } ])
+                await sleep(3000)                
                 
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Please hold on while your audio settings load." } ])
-                await sleep(10000)
-
+                    {type: "text", value: "Please take a moment to check that your video and audio are working by clicking on **Video Settings** in the top toolbar. Press the **Hide** button at the bottom of the meeting screen to hide it." } ])
+                
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "You can change your video settings by clicking the Expand Video button in the top left." } ])
-                await sleep(3000)
+                    {type: "text", value: "It can take a few seconds for your audio to be connected. Please hold on while your audio settings load." } ])
+                await sleep(5000)
 
                 await this.send([
-                    {type: "text", value: "Before we begin, take a moment to introduce yourself to your partner. Let me know once you are done."},
+                    {type: "text", value: "If you haven't already, take a moment to introduce yourself to your partner. Let me know once you are done."},
                     {type: "choices", value: ["Ready"]}
                 ])
 
@@ -822,7 +828,7 @@ There are two roles in pair programming:
     }
 
     async onQuestionPassed(questionId: string, questionTitle: string, testResults: any[]) {
-        console.log('passed', questionId, testResults)
+        console.log('passed', questionId, questionTitle, testResults)
         if (!this.state.solvedQuestionIds.includes(questionId)) {
             this.state.solvedQuestionIds.push(questionId)
         
