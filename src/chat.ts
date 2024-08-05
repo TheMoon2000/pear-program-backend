@@ -1,34 +1,35 @@
 import { WebSocket, WebSocketServer } from "ws"
 import url from 'url';
 import { getConnection, makeQuery } from "./utils/database";
-import { ChatMessage, ParticipantInfo } from "./constants";
+import { ChatMessage, ParticipantInfo, zoomInstance } from "./constants";
 import semaphore, { Semaphore } from "semaphore";
 import Bruno from "./bruno";
+import { Mutex } from "async-mutex";
+import { ACTIVE_PARTICIPANTS, ACTIVE_MEETINGS, ZOOM_HOSTS } from "./zoom_participants";
+import { IDLE_WAIT_TIMEOUT, meetingCloseTimeouts } from "./routes/webhooks";
+import { getZoomAccessToken } from "./routes/rooms";
 
 const chatServer = new WebSocketServer({ port: 4010, path: "/socket", clientTracking: false, maxPayload: 1048576 })
-export const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, sema: Semaphore}>()
+export const socketMap = new Map<string, {connections: Set<WebSocket>, history: ChatMessage[], ai: Bruno, lock: Mutex}>()
 const identityMap = new Map<WebSocket, {name: string, email: string}>()
 
-export const roomMembershipSemaphore = semaphore(1)
+export const roomMembershipMutex = new Mutex()
 
 async function getMembersInRoom(roomId: string) {
-    return new Promise<Map<string, {count: number, name: string}>>((r, _) => {
-        let members: Map<string, {count: number, name: string}> = new Map()
-        roomMembershipSemaphore.take(() => {
-            socketMap.get(roomId)?.connections.forEach(socket => {
-                const result = identityMap.get(socket)
-                if (result) {
-                    if (members.has(result.email)) {
-                        members.get(result.email)!.count += 1
-                    } else {
-                        members.set(result.email, { count: 1, name: result.name })
-                    }
-                }
-            })
-            roomMembershipSemaphore.leave()
-            r(members)
-        })
+    let members: Map<string, {count: number, name: string}> = new Map()
+    await roomMembershipMutex.acquire()
+    socketMap.get(roomId)?.connections.forEach(socket => {
+        const result = identityMap.get(socket)
+        if (result) {
+            if (members.has(result.email)) {
+                members.get(result.email)!.count += 1
+            } else {
+                members.set(result.email, { count: 1, name: result.name })
+            }
+        }
     })
+    roomMembershipMutex.release()
+    return members
 }
 
 async function sql(query: string, params?: any[]) {
@@ -47,109 +48,109 @@ chatServer.on("connection", (ws, request) => {
         return ws.close(4000, "Must provide room_id and email in query parameter")
     }
 
-    roomMembershipSemaphore.take(() => {
-        const chatHistoryPromise = new Promise<Bruno>((r, _) => {
-            sql("SELECT chat_history, `condition`, bruno_state, dyte_meeting_id FROM Rooms WHERE id = ?", [roomId]).then((room => {
-                if (room.length === 0) {
-                    return ws.close(4004, "Did not find room id")
+    roomMembershipMutex.runExclusive(async () => {
+        const room = await sql("SELECT chat_history, `condition`, bruno_state, meeting_host, zoom_meeting_id, meeting_expired FROM Rooms WHERE id = ?", [roomId])
+        if (room.length === 0) {
+            return ws.close(4004, "Did not find room id")
+        }
+        const history = room[0].chat_history ?? []
+        const condition = room[0].condition as number
+        const meetingHost: string | undefined = room[0].meeting_expired ? undefined : room[0].meeting_host
+        const meetingId: string | undefined = room[0].meeting_expired ? undefined : room[0].zoom_meeting_id
+        const brunoState = room[0].bruno_state
+            
+        ws.send(JSON.stringify(history))
+
+        let bruno = socketMap.get(roomId)?.ai ?? new Bruno(roomId, condition, history, async (message) => {
+            const roomInfo = socketMap.get(roomId)
+            if (!roomInfo) { return }
+
+            roomInfo.lock.runExclusive(async () => {
+                const fullMessage: ChatMessage = {
+                    message_id: roomInfo.history.length,
+                    sender: "AI",
+                    name: "Bruno",
+                    content: message,
+                    timestamp: new Date().toISOString()
                 }
-                const history = room[0].chat_history ?? []
-                const condition = room[0].condition as number
-                const brunoState = room[0].bruno_state
+                roomInfo.history.push(fullMessage)
                 
-                ws.send(JSON.stringify(history))
-
-                let bruno = socketMap.get(roomId)?.ai ?? new Bruno(roomId, condition, history, async (message) => {
-                    const roomInfo = socketMap.get(roomId)
-                    if (!roomInfo) { return }
-
-                    roomInfo.sema.take(async () => {
-                        const fullMessage: ChatMessage = {
-                            message_id: roomInfo.history.length,
-                            sender: "AI",
-                            name: "Bruno",
-                            content: message,
-                            timestamp: new Date().toISOString()
-                        }
-                        roomInfo.history.push(fullMessage)
-                        
-                        await Promise.all(Array.from(socketMap.get(roomId)?.connections ?? []).map(roomWs => {
-                            return new Promise((r, _) => {
-                                roomWs.send(JSON.stringify(fullMessage), r)
-                            })
-                        }))
-                        roomInfo.sema.leave()
+                await Promise.all(Array.from(socketMap.get(roomId)?.connections ?? []).map(roomWs => {
+                    return new Promise((r, _) => {
+                        roomWs.send(JSON.stringify(fullMessage), r)
                     })
-
-
-                    await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
-                        socketMap.get(roomId)?.connections.forEach(roomWs => {
-                            roomWs.close(4000, "Chat room is not writable.")
-                        })
-                    })
-                }, async (startTyping: boolean) => {
-                    socketMap.get(roomId)?.connections.forEach(roomWs => {
-                        return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
-                    })
-                }, room[0].dyte_meeting_id, brunoState)
-
-                if (!socketMap.has(roomId)) {
-                    socketMap.set(roomId, {
-                        connections: new Set([ws]),
-                        history: history,
-                        ai: bruno,
-                        sema: semaphore(1)
-                    })
-                } else {
-                    socketMap.get(roomId)!.connections.add(ws)
-                    socketMap.get(roomId)!.history = history // replace room info with newest chat history
-                }
-                r(bruno)
-            }))
-        })
-        
-        chatHistoryPromise.then((bruno) => {
-            sql("SELECT user_email, joined_date, Users.name, role FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
-                const activeEmails = Array.from(identityMap.values()).map(v => v.email)
-                const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
-                    name: p.name, email: p.user_email, id: i, role: p.role,
-                    isOnline: p.user_email === email || activeEmails.includes(p.user_email)
                 }))
-                bruno.onParticipantsUpdated(currentParticipants)
             })
-        }).finally(() => {
-            sql("SELECT name FROM Users WHERE email = ?", [email]).then(name => {
-                if (name.length === 0 && email.length > 0) {
-                    return ws.close(4004, "Did not find email in database.")
-                }
-        
-                identityMap.set(ws, { name: name[0]?.name ?? "Guest", email: email })
-        
-                if (name[0]?.name) {
-                    sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
-                }
-            }).catch(err => {
-                console.error(err)
-            }).finally(() => {
-                // Count how many connects are now associated with the user
-                let members: Map<string, {count: number, name: string}> = new Map()
-                socketMap.get(roomId)?.connections.forEach(socket => {
-                    const result = identityMap.get(socket)
-                    if (result) {
-                        if (members.has(result.email)) {
-                            members.get(result.email)!.count += 1
-                        } else {
-                            members.set(result.email, { count: 1, name: result.name })
-                        }
-                    }
-                })
-                sql("UPDATE Participants SET is_online = ? WHERE room_id = ? AND user_email = ?", [members.get(email)?.count ?? 1, roomId, email]).catch(err => {
-                    console.error(err)
-                }).finally(() => {
-                    roomMembershipSemaphore.leave()
+
+
+            await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
+                socketMap.get(roomId)?.connections.forEach(roomWs => {
+                    roomWs.close(4000, "Chat room is not writable.")
                 })
             })
+        }, async (startTyping: boolean) => {
+            socketMap.get(roomId)?.connections.forEach(roomWs => {
+                return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
+            })
+        }, meetingHost, meetingId, brunoState)
+
+        if (!socketMap.has(roomId)) {
+            socketMap.set(roomId, {
+                connections: new Set([ws]),
+                history: history,
+                ai: bruno,
+                lock: new Mutex()
+            })
+        } else {
+            socketMap.get(roomId)!.connections.add(ws)
+            socketMap.get(roomId)!.history = history // replace room info with newest chat history
+        }
+
+        console.log('socket map', socketMap)
+        
+        const participants = await sql("SELECT user_email, joined_date, Users.name, role FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId])
+
+        const activeEmails = Array.from(identityMap.values()).map(v => v.email)
+        const currentParticipants: ParticipantInfo[] = participants.map((p: any, i: number) => ({
+            name: p.name, email: p.user_email, id: i, role: p.role,
+            isOnline: p.user_email === email || activeEmails.includes(p.user_email)
+        }))
+        bruno.onParticipantsUpdated(currentParticipants)
+
+        const name = await sql("SELECT name FROM Users WHERE email = ?", [email])
+        if (name.length === 0 && email.length > 0) {
+            return ws.close(4004, "Did not find email in database.")
+        }
+
+        identityMap.set(ws, { name: name[0]?.name ?? "Guest", email: email })
+
+        if (name[0]?.name) {
+            sendNotificationToRoom(roomId, `${name[0].name} has joined the room.`)
+            sendEventOfType(roomId, "user_joined", email, { name: name[0].name })
+        }
+
+        // Count how many connects are now associated with the user
+        let members: Map<string, {count: number, name: string}> = new Map()
+        socketMap.get(roomId)?.connections.forEach(socket => {
+            const result = identityMap.get(socket)
+            if (result) {
+                if (members.has(result.email)) {
+                    members.get(result.email)!.count += 1
+                } else {
+                    members.set(result.email, { count: 1, name: result.name })
+                }
+            }
         })
+
+        await sql("UPDATE Participants SET is_online = ? WHERE room_id = ? AND user_email = ?", [members.get(email)?.count ?? 1, roomId, email]).catch(err => {
+            console.error(err)
+        })
+
+        if (meetingId && currentParticipants.length === 1 && email === currentParticipants[0].email && meetingCloseTimeouts.has(meetingId)) {
+            clearTimeout(meetingCloseTimeouts.get(meetingId))
+            meetingCloseTimeouts.delete(meetingId)
+            console.log(`Canceled countdown for closing meeting ${meetingId} since user joined back the PearProgram session within ${IDLE_WAIT_TIMEOUT}s`)
+        }
     })
 
     ws.on("message", (data: Buffer, isBinary) => {
@@ -249,13 +250,56 @@ chatServer.on("connection", (ws, request) => {
         identityMap.delete(ws)
         if (socketMap.get(roomId)?.connections?.size === 0) {
             socketMap.get(roomId)?.ai.onRoomClose()
-            socketMap.delete(roomId)
             console.log(`All participants left room ${roomId}, closing...`)
-            roomMembershipSemaphore.take(() => {
-                sql("UPDATE Participants SET is_online = 0 WHERE room_id = ?", [roomId]).finally(() => {
-                    roomMembershipSemaphore.leave()
-                })
+            roomMembershipMutex.runExclusive(async () => {
+                await sql("UPDATE Participants SET is_online = 0 WHERE room_id = ?", [roomId])
             })
+
+            // If the zoom meeting is currently empty and no timer is set for the current room, set one
+            const bruno = socketMap.get(roomId)?.ai
+            const meetingId = socketMap.get(roomId)?.ai.meetingId
+            const meetingHost = socketMap.get(roomId)?.ai.meetingHost
+            console.log(Array.from(socketMap.keys()))
+            console.log(roomId, bruno, meetingId, meetingHost, ACTIVE_PARTICIPANTS, meetingCloseTimeouts)
+            if (bruno && meetingId && meetingHost && (!ACTIVE_PARTICIPANTS.has(meetingId) || ACTIVE_PARTICIPANTS.get(meetingId)?.length === 0) && !meetingCloseTimeouts.has(meetingId)) {
+                meetingCloseTimeouts.set(meetingId, setTimeout(async () => {
+                    bruno.meetingId = undefined
+                    bruno.meetingHost = undefined
+
+                    const accessToken = await getZoomAccessToken()
+                    await zoomInstance.put(`/meetings/${meetingId}/status`, { action: "end" }, {
+                        headers: { Authorization: `Bearer ${accessToken}` }
+                    }).catch(err => console.warn(err)) // end the meeting
+                    await zoomInstance.delete(`/meetings/${meetingId}`, {
+                        headers: { Authorization: `Bearer ${accessToken}` }
+                    }).catch(err => console.warn(err)) // delete the meeting
+                    
+                    const conn = await getConnection()
+                    await makeQuery(conn, "UPDATE Participants SET zoom_url = null WHERE room_id = ?", [roomId])
+                    await makeQuery(conn, "UPDATE Rooms SET meeting_expired = 1 WHERE id = ?", [roomId])
+                    conn.release()
+
+                    // Make the host available again
+                    const hostIndex = ZOOM_HOSTS.indexOf(meetingHost)
+                    if (hostIndex >= 0 && ACTIVE_MEETINGS[hostIndex] === meetingId) {
+                        ACTIVE_MEETINGS[hostIndex] = null
+                    } else {
+                        console.warn(`Host ${meetingHost} not found`)
+                    }
+
+                    socketMap.get(roomId)?.ai.send([{
+                        type: "text",
+                        value: "The Zoom meeting for this room has automatically closed due to inactivity. If this is unintentional, please go back to the [home page](https://pearprogram.co) and start a new session."
+                    }])
+
+                    await sendEventOfType(roomId, "zoom_expired", "", {})
+
+                    console.log(`Auto-closed zoom meeting ${meetingId} for room ${roomId} due to abandoned session`)
+
+                }, IDLE_WAIT_TIMEOUT * 1000))
+                console.log(`Begin ${IDLE_WAIT_TIMEOUT}s meeting close countdown for room ${roomId}`)
+            }
+            socketMap.delete(roomId)
         } else if (leftUser?.email) {
             sql("SELECT user_email, joined_date, Users.name FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId]).then(participants => {
                 const activeEmails = Array.from(identityMap.values()).map(v => v.email)
@@ -265,10 +309,8 @@ chatServer.on("connection", (ws, request) => {
                 }))
                 socketMap.get(roomId)?.ai.onParticipantsUpdated(currentParticipants)
             })
-            roomMembershipSemaphore.take(() => {
-                sql("UPDATE Participants SET is_online = is_online - 1 WHERE room_id = ? AND user_email = ?", [roomId, email]).finally(() => {
-                    roomMembershipSemaphore.leave()
-                })
+            roomMembershipMutex.runExclusive(async () => {
+                await sql("UPDATE Participants SET is_online = is_online - 1 WHERE room_id = ? AND user_email = ?", [roomId, email])
             })
         }
 
@@ -287,33 +329,29 @@ export async function sendNotificationToRoom(roomId: string, message: string) {
         return false
     }
 
-    await new Promise<void>((r, _) => {
-        roomInfo.sema.take(1, async () => {
-            const notification = {
-                sender: "system",
-                name: "System",
-                message_id: roomInfo.history.length,
-                system_message: message,
-                timestamp: new Date().toISOString()
-            }
-            roomInfo.history.push(notification)
-            await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
-                socketMap.get(roomId)?.connections.forEach(roomWs => {
-                    roomWs.close(4000, "Chat room is not writable.")
-                })
+    await roomInfo.lock.runExclusive(async () => {
+        const notification = {
+            sender: "system",
+            name: "System",
+            message_id: roomInfo.history.length,
+            system_message: message,
+            timestamp: new Date().toISOString()
+        }
+        roomInfo.history.push(notification)
+        await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
+            socketMap.get(roomId)?.connections.forEach(roomWs => {
+                roomWs.close(4000, "Chat room is not writable.")
             })
-            roomInfo.connections.forEach(roomWs => {
-                roomWs.send(JSON.stringify(notification))
-            })
-            roomInfo.sema.leave()
-            r()
+        })
+        roomInfo.connections.forEach(roomWs => {
+            roomWs.send(JSON.stringify(notification))
         })
     })
 
     return true
 }
 
-export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started" | "update_role" | "leave_session", senderEmail: string, data: Record<string, any>) {
+export async function sendEventOfType(roomId: string, eventType: "question_update" | "autograder_update" | "terminal_started" | "update_role" | "leave_session" | "zoom_bot_joined" | "zoom_bot_left" | "user_joined" | "zoom_expired", senderEmail: string, data: Record<string, any>) {
     const roomInfo = socketMap.get(roomId)
     if (!roomInfo) {
         return false

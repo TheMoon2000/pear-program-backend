@@ -5,8 +5,11 @@ import cors from 'cors';
 import axios from "axios";
 import 'dotenv/config';
 import "./chat";
-import { roomRouter } from "./routes/rooms";
+import "./queue_system";
+import { roomRouter, getZoomAccessToken } from "./routes/rooms";
 import { getConnection, makeQuery } from "./utils/database";
+import webhookRouter from "./routes/webhooks";
+import queueRouter from "./routes/queue";
 
 const app = express()
 const port = 8010
@@ -17,6 +20,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use("/rooms", roomRouter);
+app.use("/webhooks", webhookRouter);
+app.use("/queue", queueRouter);
 
 app.get("/", async (req, res) => {
     res.send("success")
@@ -49,6 +54,15 @@ app.get("/questions/:question_id", async (req, res) => {
         conn.release()
     }
 });
+
+app.get("/zoom_access_token", async (req, res) => {
+    if (req.query.secret === "pearprogram-recall-secret-string") {
+        const accessToken = await getZoomAccessToken()
+        res.send(accessToken)
+    } else {
+        res.send()
+    }
+})
 
 app.listen(port, async () => {
     let conn = await getConnection()

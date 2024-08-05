@@ -1,12 +1,11 @@
 import axios from "axios";
 import { sendEventOfType, sendNotificationToRoom } from "./chat"
-import { ChatMessage, ChatMessageSection, ParticipantInfo, BrunoState } from "./constants"
+import { ChatMessage, ChatMessageSection, ParticipantInfo, BrunoState, recallInstance } from "./constants"
 import { getCodeHistoryOfRoom } from "./routes/rooms"
 import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
-import { parse } from "csv-parse/sync";
-import { NumericLiteral } from "typescript";
+import { ACTIVE_PARTICIPANTS } from "./zoom_participants";
 
 /* To Do Summary:
  + Implement Switching Roles Functionality in Turn Taking Intervention (Either GPT or Hard-Code)
@@ -17,7 +16,6 @@ import { NumericLiteral } from "typescript";
  + (Future) Calculate Conversation Data Metrics
 */
 
-const dyteInstance = axios.create({ baseURL: "https://api.dyte.io/v2", headers: { Authorization: `Basic ${process.env.DYTE_AUTH}`} })
 
 export default class Bruno {
     readonly roomId: string
@@ -51,13 +49,17 @@ export default class Bruno {
 
     // private periodicFunctionStarted: boolean
 
-    private dyteMeetingId: string
+    private recallBotId?: string
+    private onePersonExitReminder?: NodeJS.Timeout
+    private previousZoomParticipantCount = 0
+    meetingHost?: string // for expired meetings, this field will be undefined
+    meetingId?: string // for expired meetings, this field will be undefined
 
     private state: BrunoState
 
     private numRoleSwitches: number
 
-    private periodLength = 10
+    private periodLength = 5 // TODO: 10
 
     //Last line of previous chunk
     // private chunkHistory = -1
@@ -107,12 +109,14 @@ export default class Bruno {
      * @param roomId The ID of the room.
      * @param send An asynchronous function for sending messages as Bruno into the room.
      */
-    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, dyteMeetingId: string, savedState?: BrunoState) {
+    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, meetingHost: string | undefined, meetingId: string | undefined, savedState?: BrunoState) {
         this.roomId = roomId
         this.condition = condition
         this.send = send
         this.sendTypingStatus = sendTypingStatus
         this.currentChatHistory = chatHistory
+        this.meetingHost = meetingHost
+        this.meetingId = meetingId
         // this.brunoMessages = [{role: "system", content: this.initialPrompt}]  // Modify later to account for room restored from existing session
         this.interventionSpecificMessages = [
             { role: "system", content: this.initialPrompt },
@@ -123,8 +127,7 @@ export default class Bruno {
         // this.periodicFunctionStarted = false
         this.numRoleSwitches = 0
         this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
-        this.dyteMeetingId = dyteMeetingId
-        console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}`)
+        console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}, meeting host ${meetingHost}, id ${meetingId}`)
     }
 
     async intersubjectivityIntervention(participants: ParticipantInfo[]){
@@ -276,9 +279,7 @@ export default class Bruno {
         // var numSwitches = databaseNumSwitches - this.numRoleSwitches           
         
         if (participants[0].role != 0 && participants[1].role != 0) {
-            var talkPercentages = await this.getConversationContribution()
-            var aTalkPercentage = talkPercentages[0];
-            var bTalkPercentage = talkPercentages[1];
+            var talkPercentages = await this.getTimeContribution()
     
             var codeContributions = await this.getCodeContribution()
             var codePercentageA = codeContributions[0]
@@ -286,6 +287,7 @@ export default class Bruno {
     
             var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
             var fulfilledRoles = false
+            const currentParticipantTalkTime = (talkPercentages[participants[0].name] ?? 0)
             if (participants[0].role == 1) {
                 role1 = "[DRIVER]"
                 role2 = "[NAVIGATOR]"
@@ -294,9 +296,9 @@ export default class Bruno {
                 role2Goal = " should be the main contributor to the conversation. ";
 
                 role1Metric = codePercentageA + "% Code Written"
-                role2Metric = bTalkPercentage + "% Participation in Conversation"
+                role2Metric = 100 - currentParticipantTalkTime + "% Participation in Conversation"
 
-                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), parseFloat(bTalkPercentage))
+                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), 100 - currentParticipantTalkTime)
             }
             else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
@@ -305,10 +307,10 @@ export default class Bruno {
                 role1Goal = " should be the main contributor to the conversation. ";
                 role2Goal = " should be writing the majority of the code. ";
 
-                role1Metric = aTalkPercentage + "% Participation in Conversation"
+                role1Metric = currentParticipantTalkTime + "% Participation in Conversation"
                 role2Metric = codePercentageB + "% Code Written"
 
-                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), parseFloat(aTalkPercentage))
+                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), currentParticipantTalkTime)
             }
 
             this.interventionSpecificMessages.push({
@@ -342,9 +344,11 @@ export default class Bruno {
     }
 
     async talkTimeIntervention(participants: ParticipantInfo[]){
-        var talkPercentages = await this.getConversationContribution()
-        var aTalkPercentage = talkPercentages[0];
-        var bTalkPercentage = talkPercentages[1];
+        if (participants.length != 2) {
+            console.warn("Did not find 2 students, skipping talk time intervention")
+            return
+        }
+        var talkPercentages = await this.getTimeContribution()
       
         this.interventionSpecificMessages.push({
             role: "system",
@@ -353,52 +357,37 @@ export default class Bruno {
               [METRIC] Student A: 20% Conversation \n \
               [METRIC] Student B: 80% Conversation \n \
               \
-              You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags.",
+              You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags. A conversation contribution between 40-60% is considered an even split between the students.",
           });
           this.interventionSpecificMessages.push({
             role: "system",
-            content: `\n[METRIC] ${participants[0].name}: ${aTalkPercentage}% Contribution to Conversation
-                      \n[METRIC] ${participants[1].name}: ${bTalkPercentage}% Contribution to Conversation`,
+            content: participants.map(p => `[METRIC] ${p.name}: ${talkPercentages[p.name]}% Contribution to Conversation`).join("\n")
           });
           // await this.gpt();
           await this.gptLimitedContext();
-          this.interventionSpecificMessages.pop;
-          this.interventionSpecificMessages.pop;
+          this.interventionSpecificMessages.pop();
+          this.interventionSpecificMessages.pop();
     }
 
-    async getConversationContribution(): Promise<[string, string]> {
-        var conversationContributionA = 0.0
-        var conversationContributionB = 0.0
-        try {
-            let transcript = await this.fetchTranscript()
-            if (transcript !== null) {
-                var curIndex = transcript.length - 1
-                var curTime = transcript[curIndex].timestamp
+    async getTimeContribution(duration=600) {
+        let timePerPerson: Record<string, number> = {}
+        let totalContributions: Record<string, number> = {}
+        let totalTime = 0
 
-                // CHANGE TIME PERIOD LATER
-                var beginPeriod = curTime - (this.periodLength * 60)
-
-                while (curIndex >= 0 && curTime >= beginPeriod) {
-                    if (transcript[curIndex].name == this.participantData[0].name) {
-                        conversationContributionA += transcript[curIndex].speech.length
-                    }
-                    else if (transcript[curIndex].name == this.participantData[1].name) {
-                        conversationContributionB += transcript[curIndex].speech.length
-                    }
-                    curIndex--
-                    curTime = transcript[curIndex].timestamp
-                }
-
-                if (conversationContributionA + conversationContributionB != 0) {
-                    var tempCopyA = conversationContributionA
-                    conversationContributionA = conversationContributionA / (conversationContributionA + conversationContributionB)
-                    conversationContributionB = conversationContributionB / (tempCopyA + conversationContributionB)
-                }
-            }
-        } catch {
-            return [conversationContributionA.toFixed(2), conversationContributionB.toFixed(2)]
+        const transcript = await this.fetchTranscript()
+        if (transcript.length === 0) {
+            return timePerPerson
         }
-        return [conversationContributionA.toFixed(2), conversationContributionB.toFixed(2)]
+        const last = transcript.at(-1)!
+        transcript.forEach(segment => {
+            if (segment.timestamp > last.timestamp - duration) {
+                totalContributions[segment.name] = (totalContributions[segment.name] ?? 0) + segment.duration
+                totalTime += segment.duration
+            }
+        })
+
+        totalContributions = Object.fromEntries(Object.entries(timePerPerson).map(entry => [entry[0], Math.round(entry[1] / totalTime * 100)]))
+        return totalContributions
     }
 
     async getCodeContribution(specificCode?: string): Promise<[string, string]> {
@@ -420,18 +409,10 @@ export default class Bruno {
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
-            // await this.send([
-            //     {type: "text", value: `Talk Time` } ])
-        }
-        else if (this.condition === 1) { 
+        } else if (this.condition === 1) { 
             await this.turnTakingIntervention(participants)             
-            // await this.send([
-            //     {type: "text", value: `Turn Taking` } ])
-            }
-        else if (this.condition === 2) { 
+        } else if (this.condition === 2) { 
             await this.intersubjectivityIntervention(participants)
-            // await this.send([
-            //     {type: "text", value: `Intersubjectivity` } ])
         }
     }
 
@@ -513,6 +494,8 @@ export default class Bruno {
 
         console.log('composing chatgpt assessment for', testCase)
 
+        await this.sendTypingStatus(true);
+
         if (testCase.length === 0) {
             console.warn("Selected test case not found")
         } else {
@@ -544,13 +527,11 @@ export default class Bruno {
                 messages: graderMessages,
                 model: "gpt-3.5-turbo",
                 });
-    
-                await this.sendTypingStatus(true);
-                await sleep(1000);
-                await this.sendTypingStatus(false);
+
                 if (completion.choices[0].message.content != null ) {
-                    console.log('raw gpt message', completion.choices[0].message.content)
-                    const json = JSON.parse(completion.choices[0].message.content)
+                    const cleaned = completion.choices[0].message.content//.replace(/.+\{/sg, "{")
+                    console.log('raw gpt message', cleaned)
+                    const json = JSON.parse(cleaned)
                     if (json.score === 10) {
                         // await this.send([{ type: "text", value: json.feedback }]);
                         this.onQuestionPassed(questionId, testCase[0].title, [])
@@ -569,6 +550,7 @@ export default class Bruno {
                 await this.send([{ type: "text", value: "I can't grade you right now due to an unexpected server issue. Please try again later." }])
             }
         }
+        await this.sendTypingStatus(false);
     }
 
     //If someone refreshes before "take a moment to introduce yourself" is done
@@ -616,11 +598,19 @@ export default class Bruno {
                     content: `Both students, ${participants[0].name} and ${participants[1].name}, are currently working on their selected problem. Do not greet them.`,
                 });
 
+                const conditionName = ["Talk time", "Turn taking", "Intersubjectivity"][this.condition]
+                await this.send([
+                    {
+                        type: "text",
+                        value: `(Debug message) Room condition: ${conditionName}`
+                    }
+                ])
+
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Hi, I'm Bruno your pair programming facillitator. I'm here to help you get the most out of this session."}
+                    {type: "text", value: "Hi, I'm Bruno, your pair programming facillitator. I'm here to help you get the most out of this session."}
                 ])
                 await sleep(3000)
                 
@@ -628,24 +618,18 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Please allow video and audio access in your browser so you can communicate with your partner." } ])
-                await sleep(3000)                
-                
+                    {type: "text", value: "I've created a Zoom meeting for the two of you to communicate with each other as you work together. Please join the meeting now by clicking the “Join Video Call” button in the top left corner." } ])
+                await sleep(3000)
+
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Please take a moment to check that your video and audio are working by clicking on **Video Settings** in the top toolbar. Press the **Hide** button at the bottom of the meeting screen to hide it." } ])
-                
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "It can take a few seconds for your audio to be connected. Please hold on while your audio settings load." } ])
-                await sleep(5000)
+                    {type: "text", value: "When both of you are in the Zoom meeting, a PearProgram bot will be there to provide me information about your progress. It won't intervene your conversation in any way. You can safely ignore it." } ])
+                await sleep(3000) 
 
                 await this.send([
-                    {type: "text", value: "If you haven't already, take a moment to introduce yourself to your partner. Let me know once you are done."},
+                    {type: "text", value: "Now, if you haven't already, take a moment to introduce yourself to your partner. Let me know once you are done."},
                     {type: "choices", value: ["Ready"]}
                 ])
 
@@ -663,7 +647,7 @@ export default class Bruno {
         }
 
         // BRUNO DOES NOT KNOW WHEN A PARTICIPANT HAS LEFT. PERIODIC FUNCTIONS ARE RESET
-        else if (participants.length === 2 && (participants[0].isOnline !== true || participants[1].isOnline !== true)) {  // If not every participant is online
+        else if (participants.length === 2 && (!participants[0].isOnline || !participants[1].isOnline)) {  // If not every participant is online
             var studentName = ""
             if (participants[0].isOnline !== true) {
                 studentName = participants[0].name
@@ -673,11 +657,6 @@ export default class Bruno {
             }
             
             if (studentName !== ""){
-                // await this.send([{type: "text", value: studentName + " is currently offline. You can wait for " + studentName + " to rejoin or click the button below to join a new coding session."}])
-                // this.brunoMessages.push({role: "system", content: studentName + " is currently offline. There is currently one student remaining in the room"})
-                
-                // await sendNotificationToRoom(this.roomId, `${studentName} is currently offline. You can wait for ${studentName} to rejoin or click the button below to join a new coding session.`)
-                // await sendNotificationToRoom(this.roomId, `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.`)
                 await sendEventOfType(this.roomId, "leave_session", "AI", { title: `${studentName} is currently offline. You can wait for ${studentName} to rejoin by closing this dialog, or navigate to pearprogram.co to start a new session.`, message: `Note: All coding progress will be lost if you join a new coding session! Save your code elsewhere (e.g. in notepad) if you would like to transfer your progress.` })
 
                 // await this.send([
@@ -840,12 +819,17 @@ There are two roles in pair programming:
             await sleep(3000)
             await this.send([{
                 type: "text",
-                value: "Please take a few minutes to share your feedback regarding your coding experience at [google form link]."
+                value: "Please take a few minutes to share your feedback regarding your coding experience at [this link](https://forms.gle/3a7kP3YgC8zjZuaQ8)."
             }])
             await sleep(3000)
             await this.send([{
                 type: "text",
                 value: "If you are interested in working on more problems, you can select a different problem by clicking the **Switch Coding Problem** button."
+            }])
+        } else {
+            await this.send([{
+                type: "text",
+                value: `Congrats again for solving ${questionTitle}!`
             }])
         }
     }
@@ -866,18 +850,53 @@ There are two roles in pair programming:
 
     // Failable. Need to be catched.
     async fetchTranscript() {
-        const { transcript_download_url } = (await dyteInstance.get(`/meetings/${this.dyteMeetingId}/active-transcript`)).data.data
+        const rawTranscript = (await recallInstance.get(`/bot/${this.recallBotId}/transcript`)).data as Record<string, any>[]
 
-        if (transcript_download_url) {
-            const csv = await axios.get(transcript_download_url).then(r => r.data) // should be a string
-            const transcript = (parse(csv, { skip_empty_lines: true }) as string[][]).map((item: any) => {
-                return { timestamp: Number(item[0]), name: item[4] as string, speech: item[5] as string }
-            })
-            return transcript
-        } else {
-            console.warn(`Transcript not available for room ${this.roomId}`)
-            return null
+        return rawTranscript.map(entry => {
+            if (entry.speaker.endsWith(" 1")) {
+                entry.speaker = entry.speaker.slice(0, -2)
+            }
+            return {
+                timestamp: entry.end_timestamp as number,
+                duration: entry.end_timestamp - entry.start_timestamp as number,
+                speech: entry.text as string,
+                name: entry.speaker as string
+            }
+        })
+    }
+
+    async onBotEnteredZoom(botId: string) {
+        this.recallBotId = botId
+        await sendNotificationToRoom(this.roomId, "PearProgram Bot has joined the Zoom meeting.")
+    }
+
+    async onBotLeftZoom(botId: string) {
+        this.recallBotId = undefined
+        await sendNotificationToRoom(this.roomId, "PearProgram Bot has left the Zoom meeting.")
+    }
+
+    async onZoomParticipantUpdated() {
+        if (ACTIVE_PARTICIPANTS.size === 1 && this.previousZoomParticipantCount === 2) {
+            this.onePersonExitReminder = setTimeout(() => {
+                this.send([
+                    {
+                        type: "text",
+                        value: "Looks like someone exited the Zoom meeting. If this is unintentional, please use the **Join Video Call** button in PearProgram to rejoin."
+                    }
+                ])
+            }, 10000)
+        } else if (ACTIVE_PARTICIPANTS.size >= 2) {
+            clearTimeout(this.onePersonExitReminder)
+        } else if (ACTIVE_PARTICIPANTS.size === 0 && this.previousZoomParticipantCount === 2) {
+            clearTimeout(this.onePersonExitReminder)
+            this.send([
+                {
+                    type: "text",
+                    value: "Looks like no one is in the Zoom meeting anymore. I will be closing it after 5 minutes. I hope you enjoyed your call together. You can always come back to your code by visiting the same URL."
+                }
+            ])
         }
+        this.previousZoomParticipantCount = ACTIVE_PARTICIPANTS.size
     }
 }
 

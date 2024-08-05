@@ -4,6 +4,10 @@ import axios from "axios"
 export const authHeader = { Authorization: "token 6b116b41b7c446c0910671f36c7abf47" }
 export const hubInstance = axios.create({ baseURL: "http://172.17.0.2:8020/notebook/hub/api", headers: authHeader })
 export const serverInstance = axios.create({ baseURL: "http://172.17.0.2:8020/notebook/user" })
+export const recallInstance = axios.create({ baseURL: "https://us-west-2.recall.ai/api/v1", headers: {
+    Authorization: `Token ${process.env.RECALL_API_KEY}`
+} })
+export const zoomInstance = axios.create({ baseURL: "https://api.zoom.us/v2" })
 
 export interface ChatMessageSection {
     type: "text" | "choices",
