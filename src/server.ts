@@ -10,6 +10,7 @@ import { roomRouter, getZoomAccessToken } from "./routes/rooms";
 import { getConnection, makeQuery } from "./utils/database";
 import webhookRouter from "./routes/webhooks";
 import queueRouter from "./routes/queue";
+import "./utils/intersubjectivity"
 
 const app = express()
 const port = 8010

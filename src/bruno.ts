@@ -6,6 +6,7 @@ import { getConnection, makeQuery } from "./utils/database"
 import OpenAI from 'openai';
 import { ChatCompletionMessageParam } from "openai/src/resources/index.js";
 import { ACTIVE_PARTICIPANTS } from "./zoom_participants";
+import { intersubjectivity } from "./utils/intersubjectivity";
 
 /* To Do Summary:
  + Implement Switching Roles Functionality in Turn Taking Intervention (Either GPT or Hard-Code)
@@ -15,7 +16,6 @@ import { ACTIVE_PARTICIPANTS } from "./zoom_participants";
  + Switch all internal variables to dictionary state to send to Jerry
  + (Future) Calculate Conversation Data Metrics
 */
-
 
 export default class Bruno {
     readonly roomId: string
@@ -133,6 +133,10 @@ export default class Bruno {
     async intersubjectivityIntervention(participants: ParticipantInfo[]){
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
 
+        let contributionByLine: number[][] = [] // [length written by user 1, length written by user 2]
+
+
+
         var chunkSize = 4
 
         //If code history longer than designated chunkSize
@@ -168,13 +172,13 @@ export default class Bruno {
                     var authorMapIndex = firstNewLine + chunkSize
 
                         // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
-                    if (parseFloat(codePercentages[0]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
+                    if (codePercentages[0] >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
                             this.localAuthorMap.set(authorMapIndex, 0)  // Add this chunk to map w/ author = 0
                             chunkWriter = participants[0].name
                             nonChunkWriter = participants[1].name
                             chunkNotFound = false
                     }
-                    else if (parseFloat(codePercentages[1]) >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
+                    else if (codePercentages[1] >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
                             this.localAuthorMap.set(authorMapIndex, 1) // Add this chunk to map w/ author = 1
                             chunkWriter = participants[1].name
                             nonChunkWriter = participants[0].name
@@ -298,7 +302,7 @@ export default class Bruno {
                 role1Metric = codePercentageA + "% Code Written"
                 role2Metric = 100 - currentParticipantTalkTime + "% Participation in Conversation"
 
-                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageA), 100 - currentParticipantTalkTime)
+                fulfilledRoles = this.properlyFulfilledRoles(codePercentageA, 100 - currentParticipantTalkTime)
             }
             else if (participants[0].role == 2) {
                 role1 = "[NAVIGATOR]"
@@ -310,7 +314,7 @@ export default class Bruno {
                 role1Metric = currentParticipantTalkTime + "% Participation in Conversation"
                 role2Metric = codePercentageB + "% Code Written"
 
-                fulfilledRoles = this.properlyFulfilledRoles(parseFloat(codePercentageB), currentParticipantTalkTime)
+                fulfilledRoles = this.properlyFulfilledRoles(codePercentageB, currentParticipantTalkTime)
             }
 
             this.interventionSpecificMessages.push({
@@ -390,7 +394,7 @@ export default class Bruno {
         return totalContributions
     }
 
-    async getCodeContribution(specificCode?: string): Promise<[string, string]> {
+    async getCodeContribution(specificCode?: string): Promise<[number, number]> {
         if (specificCode != null) {
             var code = specificCode.replace(/[?\n]/g, "")
         }
@@ -400,10 +404,10 @@ export default class Bruno {
                 var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?\n]/g, "")
             }
             else {
-                return ["0","0"]
+                return [0,0]
             }
         }
-        return [((code.match(/0/g) || "").length / code.length * 100).toFixed(2), ((code.match(/1/g) || "").length / code.length * 100).toFixed(2)]
+        return [((code.match(/0/g) || "").length / code.length * 100), ((code.match(/1/g) || "").length / code.length * 100)]
     }
     // Runs every 5 minutes
     async periodicFunction(participants: ParticipantInfo[]) {
