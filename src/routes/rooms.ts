@@ -473,8 +473,8 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
 // Update question id of room
 roomRouter.patch("/:room_id", async (req, res) => {
 
-    if (typeof req.body?.question_id !== "string" || typeof req.body?.name !== "string") {
-        return res.status(400).send("Must provide `question_id` and `name` as string in body.")
+    if (typeof req.body?.question_id !== "string" || typeof req.body?.name !== "string" || typeof req.body?.email !== "string") {
+        return res.status(400).send("Must provide `question_id`, `name`, and `email` as string in body.")
     }
 
     const conn = await getConnection()
@@ -503,7 +503,7 @@ roomRouter.patch("/:room_id", async (req, res) => {
                     [req.params.room_id, testCases[0].starter_code, author_map, req.body.question_id])
 
         await sendNotificationToRoom(req.params.room_id, `${req.body.name} has changed the problem to ${testCases[0].title}`)
-        
+        await sendEventOfType(req.params.room_id, "question_update", req.body.email, { email: req.body.email, question: testCases[0] })
         res.send(testCases[0])
     } catch (error) {
         console.log(error)

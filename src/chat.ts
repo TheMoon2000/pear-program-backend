@@ -63,11 +63,14 @@ chatServer.on("connection", (ws, request) => {
 
         let bruno = socketMap.get(roomId)?.ai ?? new Bruno(roomId, condition, history, async (message) => {
             const roomInfo = socketMap.get(roomId)
-            if (!roomInfo) { return }
+            if (!roomInfo) { return -1 }
 
-            roomInfo.lock.runExclusive(async () => {
+            let message_id = -1
+
+            await roomInfo.lock.runExclusive(async () => {
+                message_id = roomInfo.history.length
                 const fullMessage: ChatMessage = {
-                    message_id: roomInfo.history.length,
+                    message_id,
                     sender: "AI",
                     name: "Bruno",
                     content: message,
@@ -82,12 +85,13 @@ chatServer.on("connection", (ws, request) => {
                 }))
             })
 
-
             await sql("UPDATE Rooms SET chat_history = ? WHERE id = ?", [JSON.stringify(roomInfo.history), roomId]).catch(() => {
                 socketMap.get(roomId)?.connections.forEach(roomWs => {
                     roomWs.close(4000, "Chat room is not writable.")
                 })
             })
+            
+            return message_id
         }, async (startTyping: boolean) => {
             socketMap.get(roomId)?.connections.forEach(roomWs => {
                 return roomWs.send(JSON.stringify({ sender: "AI", name: "Bruno", event: startTyping ? "start_typing" : "stop_typing" }))
@@ -105,8 +109,6 @@ chatServer.on("connection", (ws, request) => {
             socketMap.get(roomId)!.connections.add(ws)
             socketMap.get(roomId)!.history = history // replace room info with newest chat history
         }
-
-        console.log('socket map', socketMap)
         
         const participants = await sql("SELECT user_email, joined_date, Users.name, role FROM Participants INNER JOIN Users ON Users.email = Participants.user_email WHERE room_id = ? ORDER BY joined_date", [roomId])
 

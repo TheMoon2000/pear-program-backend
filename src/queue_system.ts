@@ -6,7 +6,7 @@ import { WebSocket, WebSocketServer } from "ws"
 import url from 'url';
 import fastq from "fastq"
 import { v4 } from "uuid"
-import { ACTIVE_MEETINGS, ZOOM_HOSTS } from "./zoom_participants"
+import { ACTIVE_MEETINGS, ACTIVE_PARTICIPANTS, ZOOM_HOSTS } from "./zoom_participants"
 import { meetingCloseTimeouts, UNUSED_MEETING_TIMEOUT } from "./routes/webhooks"
 
 interface AdmitTask {
@@ -29,7 +29,7 @@ queueServer.on("connection", (ws, request) => {
     } else {
         admitQueue.push({ name, email, socket: ws })
         
-        ws.send(JSON.stringify({ order: admitQueue.length() }))
+        ws.send(JSON.stringify({ order: admitQueue.length() + 1 }))
     }
 
 })
@@ -154,6 +154,7 @@ async function admitIntoRoomWorker(task: AdmitTask) {
             let chosenHost: string | undefined
             let hostIndex = -1
             let waitTime = 0
+            let notifiedSoloMeetings = new Set<string>()
             while (task.socket.readyState === WebSocket.OPEN && !chosenHost) {
                 for (let i = 0; i < ACTIVE_MEETINGS.length; i++) {
                     if (ACTIVE_MEETINGS[i] === null) {
@@ -164,6 +165,17 @@ async function admitIntoRoomWorker(task: AdmitTask) {
                 }
                 console.log(task.email, "waiting", waitTime)
                 task.socket.send(JSON.stringify({ order: 0 }))
+                for (const [meetingId, participants] of ACTIVE_PARTICIPANTS.entries()) {
+                    if (participants.length === 1 && !notifiedSoloMeetings.has(meetingId)) {
+                        notifiedSoloMeetings.add(meetingId)
+                        socketMap.get(participants[0].roomId)?.ai.send([
+                            {
+                                type: "text",
+                                value: `Hey ${participants[0].username}, seems like you are the only one in the Zoom meeting now. I just wanted to let you know that someone else is already waiting outside to start a new PearProgram session, and they can't start until you exit the Zoom meeting (due to Zoom quotas). Please be mindful of the time that you are spending inside Zoom. You can still write code in the PearProgram session after leaving Zoom.`
+                            }
+                        ])
+                    }
+                }
                 await new Promise((r, _) => setTimeout(r, 3000))
                 waitTime += 3
             }

@@ -24,7 +24,7 @@ export default class Bruno {
     periodicFunctionInstance?: NodeJS.Timeout
 
     // Use this to send a message into the room
-    readonly send: (message: ChatMessageSection[]) => Promise<void>
+    readonly send: (message: ChatMessageSection[]) => Promise<number>
     readonly sendTypingStatus: (startTyping: boolean) => Promise<void>
 
     private currentChatHistory: ChatMessage[] = []
@@ -109,7 +109,7 @@ export default class Bruno {
      * @param roomId The ID of the room.
      * @param send An asynchronous function for sending messages as Bruno into the room.
      */
-    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<void>, sendTypingStatus: (startTyping: boolean) => Promise<void>, meetingHost: string | undefined, meetingId: string | undefined, savedState?: BrunoState) {
+    constructor(roomId: string, condition: number, chatHistory: ChatMessage[], send: (message: ChatMessageSection[]) => Promise<number>, sendTypingStatus: (startTyping: boolean) => Promise<void>, meetingHost: string | undefined, meetingId: string | undefined, savedState?: BrunoState) {
         this.roomId = roomId
         this.condition = condition
         this.send = send
@@ -374,7 +374,7 @@ export default class Bruno {
         let totalContributions: Record<string, number> = {}
         let totalTime = 0
 
-        const transcript = await this.fetchTranscript()
+        const transcript = await this.fetchTranscript().catch(err => [])
         if (transcript.length === 0) {
             return timePerPerson
         }
@@ -407,6 +407,15 @@ export default class Bruno {
     }
     // Runs every 5 minutes
     async periodicFunction(participants: ParticipantInfo[]) {
+        if (this.condition <= 2) {
+            const conditionName = ["Talk time", "Turn taking", "Intersubjectivity", "Control"][this.condition]
+            await this.send([
+                {
+                    type: "text",
+                    value: `(Debug message) Begin intervention for ${conditionName}`
+                }
+            ])
+        }
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
         } else if (this.condition === 1) { 
@@ -598,7 +607,7 @@ export default class Bruno {
                     content: `Both students, ${participants[0].name} and ${participants[1].name}, are currently working on their selected problem. Do not greet them.`,
                 });
 
-                const conditionName = ["Talk time", "Turn taking", "Intersubjectivity"][this.condition]
+                const conditionName = ["Talk time", "Turn taking", "Intersubjectivity", "Control"][this.condition]
                 await this.send([
                     {
                         type: "text",
@@ -628,8 +637,8 @@ export default class Bruno {
                     {type: "text", value: "When both of you are in the Zoom meeting, a PearProgram bot will be there to provide me information about your progress. It won't intervene your conversation in any way. You can safely ignore it." } ])
                 await sleep(3000) 
 
-                await this.send([
-                    {type: "text", value: "Now, if you haven't already, take a moment to introduce yourself to your partner. Let me know once you are done."},
+                const readyMessageId = await this.send([
+                    {type: "text", value: "Now, if you haven't already, take a moment to introduce yourself to your partner. Click the “Ready” button below to let me know once you are done."},
                     {type: "choices", value: ["Ready"]}
                 ])
 
@@ -639,6 +648,16 @@ export default class Bruno {
                 this.state.stage = 1
                 await this.saveState()
 
+                setTimeout(async () => {
+                    // If 30 seconds passed, automatically move to stage 2
+                    // reload chat history
+                    const conn = await getConnection()
+                    const [chatHistory] = await makeQuery(conn, "SELECT chat_history FROM Rooms WHERE id = ?", [this.roomId])
+                    this.currentChatHistory = chatHistory[0].chat_history
+                    if (this.state.stage === 1) {
+                        this.onUserMakesChoice(readyMessageId, 0, 0, "")
+                    }
+                }, 30000)
             }
             else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
                 this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
@@ -697,28 +716,22 @@ export default class Bruno {
         }
     }
 
-    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number, email: string) {
-        const section = this.currentChatHistory[messageId].content?.[contentIndex]
-        if (section) {
-            section.choice_index = choiceIndex
-        }
-        console.log(`User ${email} made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
+    async progressToStage2() {
+        this.state.stage = 2
+        await this.sendTypingStatus(true)
+        await sleep(2000)
+        await this.sendTypingStatus(false)
+        await this.send([
+            {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
+                                \n\nResearch has shown that students who pair program have improved learning outcomes, gain confidence and enjoy programming more!" } ])
+        await sleep(6000)
 
-        if (this.state.stage === 1) {
-            await this.sendTypingStatus(true)
-            await sleep(3000)
-            await this.sendTypingStatus(false)
-            await this.send([
-                {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
-                                    \n\nResearch has shown that students who pair program have improved learning outcomes, gain confidence and enjoy programming more!" } ])
-            await sleep(5000)
-
-            await this.sendTypingStatus(true)
-            await sleep(5000)
-            await this.sendTypingStatus(false)
-            await this.send([
-                {type: "text", 
-                value: `Heres how to pair program:
+        await this.sendTypingStatus(true)
+        await sleep(2000)
+        await this.sendTypingStatus(false)
+        await this.send([
+            {type: "text", 
+            value: `Heres how to pair program:
 
 There are two roles in pair programming:
 - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.
@@ -729,32 +742,43 @@ There are two roles in pair programming:
 **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.
 
 **Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.` } ])
-            await sleep(5000)
+        await sleep(5000)
 
-            await this.send([
-                    {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
-                ])
+        await this.send([
+            {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
+        ])
 
-                await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
-                    [this.participantData[0].email]: 1,
-                    [this.participantData[1].email]: 2
-                } })
+        await sendEventOfType(this.roomId, "update_role", "AI", { roles: {
+            [this.participantData[0].email]: 1,
+            [this.participantData[1].email]: 2
+        } })
 
-            let conn = await getConnection()
-            const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
-            await this.send([
-                {type: "text", value: "Ok, let's pick a problem!"},
-                {type: "choices", value: questions.map((q:any) => q.title)}
-            ])
-            // this.introductionFlag = true
-            conn.release()
+        let conn = await getConnection()
+        const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        await this.send([
+            {type: "text", value: "Ok, let's pick a problem!"},
+            {type: "choices", value: questions.map((q:any) => q.title)}
+        ])
+        // this.introductionFlag = true
+        conn.release()
 
-            this.state.stage = 2
-            await this.saveState()
+        await this.saveState()
+    }
 
+    async onUserMakesChoice(messageId: number, contentIndex: number, choiceIndex: number, email: string) {
+        const section = this.currentChatHistory[messageId]?.content?.[contentIndex]
+        if (section) {
+            section.choice_index = choiceIndex
+        } else {
+            console.warn(`Cannot find ${messageId} ${contentIndex} ${choiceIndex}`)
+            console.log(JSON.stringify(this.currentChatHistory))
+            return
         }
+        console.log(`User ${email} made choice: ${choiceIndex} for messageId ${messageId} contentIndex: ${contentIndex}`)
 
-        else if (this.state.stage === 2) {
+        if (this.state.stage === 1) {
+            await this.progressToStage2()
+        } else if (this.state.stage === 2 && (section?.value as string[])[0] !== "Ready") {
             const conn = await getConnection() 
             const [testCase] = await makeQuery(conn, "SELECT * FROM TestCases LIMIT ?, 1", [choiceIndex])
 
@@ -850,6 +874,8 @@ There are two roles in pair programming:
 
     // Failable. Need to be catched.
     async fetchTranscript() {
+        if (!this.recallBotId) { return [] } // If bot not yet entered, there's no transcript to return
+
         const rawTranscript = (await recallInstance.get(`/bot/${this.recallBotId}/transcript`)).data as Record<string, any>[]
 
         return rawTranscript.map(entry => {
@@ -892,7 +918,7 @@ There are two roles in pair programming:
             this.send([
                 {
                     type: "text",
-                    value: "Looks like no one is in the Zoom meeting anymore. I will be closing it after 5 minutes. I hope you enjoyed your call together. You can always come back to your code by visiting the same URL."
+                    value: "Looks like no one is in the Zoom meeting anymore. I will be closing in 1 minute. I hope you enjoyed your call together. You can always come back to your code by visiting the same URL."
                 }
             ])
         }

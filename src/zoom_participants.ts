@@ -2,6 +2,7 @@ interface ParticipantInfo {
     registrant_id?: string
     username: string
     email: string // this is not the user's actual email, it's the auto-assigned email
+    roomId: string
 }
 
 export const ACTIVE_PARTICIPANTS = new Map<string, ParticipantInfo[]>()

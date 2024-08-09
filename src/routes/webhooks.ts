@@ -16,7 +16,7 @@ export const emptyMeetingBotTimeouts = new Map<string, NodeJS.Timeout>()
 export const meetingCloseTimeouts = new Map<string, NodeJS.Timeout>()
 
 const ONE_PERSON_BOT_WAIT = 600 // recall.ai bot leaves automatically after the zoom meeting only has 1 person for this number of seconds
-const EMPTY_MEETING_CLOSE_TIMEOUT = 300 // meetings automatically close after being empty for this number of seconds
+const EMPTY_MEETING_CLOSE_TIMEOUT = 60 // meetings automatically close after being empty for this number of seconds
 const EMPTY_MEETING_BOT_LEAVE_TIMEOUT = 60 // recall.ai bot leaves automatically after all users left the zoom meeting for this number of seconds
 export const UNUSED_MEETING_TIMEOUT = 120 // meeting closes after being unused for this number of seconds
 export const IDLE_WAIT_TIMEOUT = 30 // meeting closes after the only participant in a PearProgram session left for this number of seconds
@@ -100,7 +100,8 @@ webhookRouter.all("/zoom", async (req, res) => {
                         ACTIVE_PARTICIPANTS.get(meetingId)?.push({
                             registrant_id: participantObject.registrant_id,
                             username: participantObject.user_name,
-                            email: participantObject.email
+                            email: participantObject.email,
+                            roomId: roomId
                         })
     
                         // If the participant count reaches 2 and no bot is in the room right now, dispatch a new bot
