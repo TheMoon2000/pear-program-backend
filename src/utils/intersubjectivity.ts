@@ -11,7 +11,7 @@ interface LineContribution {
 export function intersubjectivity(code: string, authorMap: string, explainer: 0 | 1): { startIndex: number, endIndex: number } | null {
     if (code.length !== authorMap.length) {
         console.warn("Code and author map don't match", code.length, authorMap.length)
-        return null
+        // return null
     }
 
     let nonemptyLines: LineContribution[] = []
@@ -28,8 +28,6 @@ export function intersubjectivity(code: string, authorMap: string, explainer: 0 
             })
         }
     }
-
-    console.log('nonempty lines', nonemptyLines)
 
     // Find all consecutive chunks (≥ 2 lines) written by the verifier
     let chunks: {startIndex: number, endIndex: number}[] = []

@@ -198,7 +198,7 @@ async function admitIntoRoomWorker(task: AdmitTask) {
 
                 // Count the number of existing rooms
                 const [roomCount] = await makeQuery(conn, "SELECT COUNT(id) as count FROM Rooms")
-                const condition = roomCount[0].count % 4
+                const condition = 2// roomCount[0].count % 4
                 
                 // Create zoom meeting
                 const createMeetingResponse = await zoomInstance.post(`/users/${chosenHost}/meetings`, {

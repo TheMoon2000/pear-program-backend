@@ -124,7 +124,7 @@ roomRouter.get("/:room_id", async(req, res) => {
         const rustpadHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}`)
         const authorHistory = await axios.get(`https://rustpad.io/api/text/${req.params.room_id}-authors`)
         if (rustpadHistory.data) {
-            room[0].rustpad_code = rustpadHistory.data
+            room[0].rustpad_code = (rustpadHistory.data as string).replace("\r\n", "\n")
         } else {
             // Insert starter code into rustpad
             console.log(await new Promise<any>((r, _) => {
@@ -376,7 +376,6 @@ roomRouter.post("/:room_id/code", async (req, res) => {
         const originalCode = JSON.stringify(req.body.file).replace(/\$/g, '\\$')
         const command = `docker exec -u ${req.params.room_id} env bash -c "echo -e '${originalCode.slice(1, originalCode.length - 1).replace(/'/g, "'\\''")}' > /home/${req.params.room_id}/main.py"`
         await execAsync(command)
-        console.log(command)
 
         await conn.commit()
         
@@ -499,11 +498,75 @@ roomRouter.patch("/:room_id", async (req, res) => {
             }
         ])
 
+        
+        const currentText = (await axios.get(`https://rustpad.io/api/text/${req.params.room_id}`)).data
+
         await makeQuery(conn, "INSERT INTO Snapshots (room_id, code, author_map, question_id) VALUES (?, ?, ?, ?)",
                     [req.params.room_id, testCases[0].starter_code, author_map, req.body.question_id])
 
-        await sendNotificationToRoom(req.params.room_id, `${req.body.name} has changed the problem to ${testCases[0].title}`)
+        await new Promise<any>((r, _) => {
+            const roomWs = new WebSocket(`wss://rustpad.io/api/socket/${req.params.room_id}`)
+            roomWs.on("message", (data: Buffer, isBinary) => {
+                const rawMessage = JSON.parse(data.toString())
+                if (rawMessage.History && rawMessage.History.start === 0) {
+                    const nextOperation = rawMessage.History.operations.length
+                    roomWs.send(JSON.stringify({
+                        "CursorData": { "cursors": [currentText.length], "selections": [[0, currentText.length]] }
+                    }), () => {
+                        roomWs.send(JSON.stringify({
+                            "Edit": { revision: nextOperation, "operation": [-currentText.length] }
+                        }), () => {
+                            console.log(JSON.stringify({
+                                Edit: { revision: nextOperation + 1, operation: [testCases[0].starter_code] }
+                            }))
+                            roomWs.send(JSON.stringify({
+                                Edit: { revision: nextOperation + 1, operation: [testCases[0].starter_code] }
+                            }), r)
+                        })
+                    })
+                }
+            })
+
+            roomWs.on("error", (error) => {
+                console.log(error)
+            })
+        })
+
+        const initialAuthorMap = testCases[0].starter_code.replace(/[^\n]/g, "?")
+        const currentAuthorCode = (await axios.get(`https://rustpad.io/api/text/${req.params.room_id}-authors`)).data
+
+        await new Promise<any>((r, _) => {
+            const authorWs = new WebSocket(`wss://rustpad.io/api/socket/${req.params.room_id}-authors`)
+            authorWs.on("message", (data: Buffer, isBinary) => {
+                const rawMessage = JSON.parse(data.toString())
+                if (rawMessage.History && rawMessage.History.start === 0) {
+                    const nextOperation = rawMessage.History.operations.length
+                    authorWs.send(JSON.stringify({
+                        "CursorData": { "cursors": [currentAuthorCode.length], "selections": [[0, currentAuthorCode.length]] }
+                    }), (err) => {
+                        if (err) console.log('cursor failed', err)
+                        authorWs.send(JSON.stringify({
+                            "Edit": { revision: nextOperation, "operation": [-currentAuthorCode.length] }
+                        }), (err) => {
+                            if (err) {
+                                console.log('delete failed', err)
+                            }
+                            authorWs.send(JSON.stringify({
+                                Edit: { revision: nextOperation + 1, operation: [initialAuthorMap] }
+                            }), r)
+                        })
+                    })
+                }
+            })
+        })
+
+        // write into the docker container
+        const originalCode = JSON.stringify(testCases[0].starter_code).replace(/\$/g, '\\$')
+        const command = `docker exec -u ${req.params.room_id} env bash -c "echo -e '${originalCode.slice(1, originalCode.length - 1).replace(/'/g, "'\\''")}' > /home/${req.params.room_id}/main.py"`
+        await execAsync(command)
+
         await sendEventOfType(req.params.room_id, "question_update", req.body.email, { email: req.body.email, question: testCases[0] })
+        await sendNotificationToRoom(req.params.room_id, `${req.body.name} has changed the problem to ${testCases[0].title}`)
         res.send(testCases[0])
     } catch (error) {
         console.log(error)

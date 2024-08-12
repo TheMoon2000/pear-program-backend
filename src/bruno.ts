@@ -130,130 +130,29 @@ export default class Bruno {
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}, meeting host ${meetingHost}, id ${meetingId}`)
     }
 
-    async intersubjectivityIntervention(participants: ParticipantInfo[]){
+    async intersubjectivityIntervention(participants: ParticipantInfo[]) {
         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
+        if (codeHistory.length === 0) { return }
 
-        let contributionByLine: number[][] = [] // [length written by user 1, length written by user 2]
+        const conn = await getConnection()
+        const [roomInfo] = await makeQuery(conn, "SELECT intersubjectivity_explainer FROM Rooms WHERE id = ?", [this.roomId])
+        let explainer: 0 | 1 = roomInfo[0].intersubjectivity_explainer ?? 0
+        explainer = 1 - explainer as (0 | 1) // switch
+        const chunk = intersubjectivity(codeHistory.at(-1)!.code, codeHistory.at(-1)!.author_map, explainer)
 
-
-
-        var chunkSize = 4
-
-        //If code history longer than designated chunkSize
-        if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > chunkSize) {
-            // var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?]/g, "")
-            var code = codeHistory[codeHistory.length - 1].author_map
-
-            var newLineIndices: number[] = [] 
-            for (let i = 0; i < code.length; i++) {
-                if (code[i] == '\n') {
-                    newLineIndices.push(i)
-                }
-            }
-            var numNewLines = newLineIndices.length
-
-            var firstNewLine = -1
-            var lastNewLine = firstNewLine + chunkSize
-
-            var chunkNotFound = true
-            var chunkWriter = ""
-            var nonChunkWriter = ""
+        if (chunk) { // this means we found a range of code for the explainer to explain
+            this.interventionSpecificMessages.push({
+                role: "system",
+                content: `There is a large chunk of code from lines ${chunk.startIndex + 1} to ${chunk.endIndex + 1} written predominantly by ${participants[1 - explainer].name}. Have ${participants[explainer].name} demonstrate their understanding of the code that ${participants[1 - explainer].name} wrote
+                        by explaining those specific lines of code to their partner.`,
+            });
+            // await this.gpt();
+            await this.gptLimitedContext();
+            this.interventionSpecificMessages.pop();
+        }
         
-            while ((lastNewLine <= numNewLines - 1) && chunkNotFound) {
-                if (firstNewLine == -1) {
-                    var curSubstring = code.substring(0, newLineIndices[lastNewLine])     
-                } else {
-                    var curSubstring = code.substring(newLineIndices[firstNewLine] + 1, newLineIndices[lastNewLine]) 
-                }
-
-                //If curSubstring Does Not Contain System-Provided Code
-                if (curSubstring.indexOf("?") == -1) {
-                    var codePercentages = await this.getCodeContribution(curSubstring)
-                    var authorMapIndex = firstNewLine + chunkSize
-
-                        // If current chunk written 70%+ by User 0 AND EITHER current chunk not in map OR is in map but written by different author
-                    if (codePercentages[0] >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 1))) { 
-                            this.localAuthorMap.set(authorMapIndex, 0)  // Add this chunk to map w/ author = 0
-                            chunkWriter = participants[0].name
-                            nonChunkWriter = participants[1].name
-                            chunkNotFound = false
-                    }
-                    else if (codePercentages[1] >= 70 && (!this.localAuthorMap.has(authorMapIndex) || (this.localAuthorMap.get(authorMapIndex) === 0))) {
-                            this.localAuthorMap.set(authorMapIndex, 1) // Add this chunk to map w/ author = 1
-                            chunkWriter = participants[1].name
-                            nonChunkWriter = participants[0].name
-                            chunkNotFound = false
-                    } else {
-                        if (authorMapIndex in this.localAuthorMap) {  // If chunk already examined and has not changed
-                            firstNewLine = lastNewLine;  // Iterate by chunkSize
-                            lastNewLine += chunkSize;
-                          } else {
-                            firstNewLine = firstNewLine + 1;
-                            lastNewLine = lastNewLine + 1;
-                        }
-                    }
-                } else {
-                    firstNewLine = firstNewLine + 1
-                    lastNewLine = lastNewLine + 1
-                }
-            }           
-
-            if(!chunkNotFound) {
-                // this.chunkHistory = lastNewLine
-
-                // Check if follow-up works
-                this.interventionSpecificMessages.push({
-                    role: "system",
-                    content: `There is a large chunk of code from lines ${firstNewLine + 2} to ${lastNewLine + 1} written predominantly by ${chunkWriter}. Have ${nonChunkWriter} demonstrate their understanding of the code that ${chunkWriter} wrote
-                            by explaining those specific lines of code to their partner.`,
-                });
-                // await this.gpt();
-                await this.gptLimitedContext();
-                this.interventionSpecificMessages.pop();
-
-
-                await this.sendTypingStatus(true);
-                await sleep(1000);
-                await this.sendTypingStatus(false);
-                await this.send([
-                    {type: "text", value: `${chunkWriter}, was ${nonChunkWriter}'s explanation correct? If not, please help ${nonChunkWriter} understand each line of the code from lines ${firstNewLine + 2} to ${lastNewLine + 1}.`,            }
-                ])
-            }
-        }   
-
-            // var numNewLines = code.match(/\n/g)?.length || -1
-
-            // var newLineIndices: Number[] = [] 
-            // for (let i = 0; i < code.length; i++) {
-            //     if (code[i] === "\n") {
-            //         newLineIndices.push(i)
-            //     }
-            // }
-
-            // var firstNewLine = this.chunkHistory
-            // var lastNewLine = firstNewLine + chunkSize
-
-            // var chunkNotFound = true
-            // var chunkWriter = ""
-            // var nonChunkWriter = ""
-
-            // // TO DO: Will repeat the same chunk, need to remember which chunks have already been looked at
-            // while ((lastNewLine < numNewLines - 1) && chunkNotFound) {
-            //     var codePercentages = await this.getCodeContribution(code.substring(firstNewLine, lastNewLine))
-            //     if (parseFloat(codePercentages[0]) >= 70) {
-            //         chunkWriter = participants[0].name
-            //         nonChunkWriter = participants[1].name
-            //         chunkNotFound = false
-            //     }
-            //     else if (parseFloat(codePercentages[1]) >= 70) {
-            //         chunkWriter = participants[1].name
-            //         nonChunkWriter = participants[0].name
-            //         chunkNotFound = false
-            //     } else {
-            //         firstNewLine = firstNewLine + 1
-            //         lastNewLine = lastNewLine + 1
-            //     }
-            // }            
+        await makeQuery(conn, "UPDATE Rooms SET intersubjectivity_explainer = ? WHERE id = ?", [explainer, this.roomId])
+        console.log(`Explainer for room ${this.roomId} switched to ${explainer}`)
     }
 
     async onRoleSwitch() {
@@ -433,10 +332,9 @@ export default class Bruno {
     async gptLimitedContext() {
         try {
             const completion = await this.openai.chat.completions.create({
-            messages: this.interventionSpecificMessages,
-            model: "gpt-3.5-turbo",
+                messages: this.interventionSpecificMessages,
+                model: "gpt-3.5-turbo",
             });
-
 
             await this.sendTypingStatus(true);
             await sleep(1000);
@@ -664,7 +562,7 @@ export default class Bruno {
                 }, 30000)
             }
             else if (!this.bothParticipantsOnline && this.state.stage == 3) {  // If one participant was previously offline and now both are online, restart periodic function
-                this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
+                // this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(participants), this.periodLength * 60 * 1000)
                 this.bothParticipantsOnline = true
             }
         }
@@ -689,7 +587,7 @@ export default class Bruno {
                 
                 // TODO: pause periodic function instead of clearing?
                 this.bothParticipantsOnline = false
-                clearInterval(this.periodicFunctionInstance)
+                // clearInterval(this.periodicFunctionInstance)
             }
             // TODO: handle case where both participants go offline?
         }
