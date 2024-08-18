@@ -13,7 +13,7 @@ export const ACTIVE_BOTS = new Map<string, string>()
 /** Email addresses of all host accounts */
 export const ZOOM_HOSTS: string[] = [
     "pearprogram-zoom1@proton.me",
-    // "pearprogram.zoom2@proton.me"
+    "pearprogram.zoom2@proton.me"
 ]
 
 // Values correspond to the order of `ZOOM_HOSTS`.

@@ -138,7 +138,13 @@ export default class Bruno {
         const [roomInfo] = await makeQuery(conn, "SELECT intersubjectivity_explainer FROM Rooms WHERE id = ?", [this.roomId])
         let explainer: 0 | 1 = roomInfo[0].intersubjectivity_explainer ?? 0
         explainer = 1 - explainer as (0 | 1) // switch
-        const chunk = intersubjectivity(codeHistory.at(-1)!.code, codeHistory.at(-1)!.author_map, explainer)
+        let chunk = intersubjectivity(codeHistory.at(-1)!.code, codeHistory.at(-1)!.author_map, explainer)
+        if (!chunk) {
+            // switch back and try again
+            explainer = 1 - explainer as (0 | 1)
+            chunk = intersubjectivity(codeHistory.at(-1)!.code, codeHistory.at(-1)!.author_map, explainer)
+            console.log("[Intersubjectivity] did not switch explainer because the other person didn't write enough code")
+        }
 
         if (chunk) { // this means we found a range of code for the explainer to explain
             this.interventionSpecificMessages.push({
@@ -149,10 +155,13 @@ export default class Bruno {
             // await this.gpt();
             await this.gptLimitedContext();
             this.interventionSpecificMessages.pop();
+            
+            await makeQuery(conn, "UPDATE Rooms SET intersubjectivity_explainer = ? WHERE id = ?", [explainer, this.roomId])
+            console.log(`Explainer for room ${this.roomId} switched to ${explainer}`)
+        } else {
+            console.log(`[Intersubjectivity] skipped room ${this.roomId} at ${new Date()} because no one has a chunk for the other to explain`)
         }
         
-        await makeQuery(conn, "UPDATE Rooms SET intersubjectivity_explainer = ? WHERE id = ?", [explainer, this.roomId])
-        console.log(`Explainer for room ${this.roomId} switched to ${explainer}`)
     }
 
     async onRoleSwitch() {
