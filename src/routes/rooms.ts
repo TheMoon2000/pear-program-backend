@@ -106,6 +106,7 @@ roomRouter.get("/recent-activity", async (req, res) => {
     }
 })
 
+// for updating participants?
 roomRouter.get("/:room_id", async(req, res) => {
     const email = req.query.email as string | undefined;
     const conn = await getConnection();
@@ -471,7 +472,6 @@ roomRouter.post("/:room_id/test_results", async (req, res) => {
 
 // Update question id of room
 roomRouter.patch("/:room_id", async (req, res) => {
-
     if (typeof req.body?.question_id !== "string" || typeof req.body?.name !== "string" || typeof req.body?.email !== "string") {
         return res.status(400).send("Must provide `question_id`, `name`, and `email` as string in body.")
     }
@@ -568,6 +568,14 @@ roomRouter.patch("/:room_id", async (req, res) => {
         await sendEventOfType(req.params.room_id, "question_update", req.body.email, { email: req.body.email, question: testCases[0] })
         await sendNotificationToRoom(req.params.room_id, `${req.body.name} has changed the problem to ${testCases[0].title}`)
         res.send(testCases[0])
+
+        let bruno = socketMap.get(req.params.room_id)?.ai
+        if (bruno) {
+            await bruno.onQuestionPick().catch(err => {
+                console.warn(err)
+            })
+        }
+
     } catch (error) {
         console.log(error)
         res.status(500).send("Internal server error")
@@ -646,6 +654,13 @@ roomRouter.post("/:room_id/switch-roles", async (req, res) => {
             role: otherRole
         })
         await sendEventOfType(req.params.room_id, "update_role", email, { roles: Object.fromEntries(newRoles.map((p: any) => [p.user_email, p.role])) })
+
+        let bruno = socketMap.get(req.params.room_id)?.ai
+        if (bruno) {
+            await bruno.onRoleSwitch().catch(err => {
+                console.warn(err)
+            })
+        }
     } catch {
         res.status(500).send("Internal server error")
     } finally {

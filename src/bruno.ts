@@ -58,6 +58,9 @@ export default class Bruno {
     private state: BrunoState
 
     private numRoleSwitches: number
+    private lastRoleSwitch: Date
+
+    private previousNumSolved: number
 
     private periodLength = 5 // TODO: 10
 
@@ -126,6 +129,8 @@ export default class Bruno {
         // this.introductionFlag = false
         // this.periodicFunctionStarted = false
         this.numRoleSwitches = 0
+        this.lastRoleSwitch = new Date(Date.now())
+        this.previousNumSolved = 0
         this.state = savedState ?? {stage: 0, solvedQuestionIds: []}
         console.log(`Initialized Bruno instance (condition ${condition}) for room ${roomId}, meeting host ${meetingHost}, id ${meetingId}`)
     }
@@ -165,6 +170,8 @@ export default class Bruno {
     }
 
     async onRoleSwitch() {
+        this.numRoleSwitches++
+        this.lastRoleSwitch = new Date(Date.now())
         // Only runs if room condition is 1 (turn taking intervention room)
         if (this.condition === 1 && this.bothParticipantsOnline) { 
             clearInterval(this.periodicFunctionInstance)
@@ -174,12 +181,12 @@ export default class Bruno {
 
     async getNumSwitches() {
         //get numswitches from database
-        return 0
+        return this.numRoleSwitches
     }
 
     properlyFulfilledRoles(driverCode: number, navigatorTalk: number) {
-        var threshold = 70
-        if (driverCode < threshold || navigatorTalk < threshold) {
+        var THRESHOLD = 70
+        if (driverCode < THRESHOLD || navigatorTalk < THRESHOLD) {
             return false
         }
         return true
@@ -188,71 +195,130 @@ export default class Bruno {
     // Function only called when students haven't switched in the past 10 minutes
     async turnTakingIntervention(participants: ParticipantInfo[]){
         // var databaseNumSwitches = await this.getNumSwitches() 
-        // var numSwitches = databaseNumSwitches - this.numRoleSwitches           
-        
-        if (participants[0].role != 0 && participants[1].role != 0) {
-            var talkPercentages = await this.getTimeContribution()
+        // var numSwitches = databaseNumSwitches - this.numRoleSwitches   
+
+        const conn = await getConnection()
+        const [info1] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ? AND is_online = 1", [participants[0].email])
+        let participant0Role: 0 | 1 | 2 = info1[0].role ?? 0
+
+        const [info2] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ? AND is_online = 1", [participants[1].email])
+        let participant1Role: 0 | 1 | 2 = info2[0].role ?? 0
+
+        if (participant0Role != 0 && participant1Role != 0) {
+            // var talkPercentages = await this.getTimeContribution()
+
+
+            // If the time since the last role switch is greater than 10 minutes, do something.
+            if (Date.now() - this.lastRoleSwitch.getTime() > 10 * 60 * 1000) {
+                if (this.state.solvedQuestionIds.length - this.previousNumSolved >= 2) {
+                    // Personalize to names and tell them the roles to switch to.
+                    await this.send([
+                        {
+                            type: "text",
+                            value: `Great work solving 2 or more problems! Try switching roles!`
+                        }
+                    ])
+                } else {
+                    // TODO: Haven't solved more than 2 problems
+                    await this.send([
+                        {
+                            type: "text",
+                            value: `It has been over 10 minutes since the last role switch. You should try switching roles!`
+                        }
+                    ])
+                }
+            }
+
+            this.previousNumSolved = this.state.solvedQuestionIds.length
     
             var codeContributions = await this.getCodeContribution()
+
             var codePercentageA = codeContributions[0]
             var codePercentageB = codeContributions[1]
+
+            if (participant0Role == 1 && codePercentageB > 70) {
+                // TODO
+                await this.send([
+                    {
+                        type: "text",
+                        value: `${participants[0].name} is the Driver but ${participants[1].name} is writing majority of code. Please correct!`
+                    }
+                ])
+            } else if (participant1Role == 1 && codePercentageA > 70) {
+                // TODO
+                await this.send([
+                    {
+                        type: "text",
+                        value: `${participants[1].name} is the Driver but ${participants[0].name} is writing majority of code. Please correct!`
+                    }
+                ])
+            } else {
+                await this.send([
+                    {
+                        type: "text",
+                        value: `Great work on following your roles. You should now switch roles using the switch roles button at the top of your screen.`
+                    }
+                ])
+            }
+
     
-            var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
-            var fulfilledRoles = false
-            const currentParticipantTalkTime = (talkPercentages[participants[0].name] ?? 0)
-            if (participants[0].role == 1) {
-                role1 = "[DRIVER]"
-                role2 = "[NAVIGATOR]"
+            // var role1, role2, role1Goal, role2Goal, role1Metric, role2Metric = ""
+            // var fulfilledRoles = false
+            // const currentParticipantTalkTime = (talkPercentages[participants[0].name] ?? 0)
+            // if (participants[0].role == 1) {
+            //     role1 = "[DRIVER]"
+            //     role2 = "[NAVIGATOR]"
 
-                role1Goal = " should be writing the majority of the code. ";
-                role2Goal = " should be the main contributor to the conversation. ";
+            //     role1Goal = " should be writing the majority of the code. ";
+            //     role2Goal = " should be the main contributor to the conversation. ";
 
-                role1Metric = codePercentageA + "% Code Written"
-                role2Metric = 100 - currentParticipantTalkTime + "% Participation in Conversation"
+            //     role1Metric = codePercentageA + "% Code Written"
+            //     role2Metric = 100 - currentParticipantTalkTime + "% Participation in Conversation"
 
-                fulfilledRoles = this.properlyFulfilledRoles(codePercentageA, 100 - currentParticipantTalkTime)
-            }
-            else if (participants[0].role == 2) {
-                role1 = "[NAVIGATOR]"
-                role2 = "[DRIVER]"
+            //     fulfilledRoles = this.properlyFulfilledRoles(codePercentageA, 100 - currentParticipantTalkTime)
+            // }
+            // else if (participants[0].role == 2) {
+            //     role1 = "[NAVIGATOR]"
+            //     role2 = "[DRIVER]"
 
-                role1Goal = " should be the main contributor to the conversation. ";
-                role2Goal = " should be writing the majority of the code. ";
+            //     role1Goal = " should be the main contributor to the conversation. ";
+            //     role2Goal = " should be writing the majority of the code. ";
 
-                role1Metric = currentParticipantTalkTime + "% Participation in Conversation"
-                role2Metric = codePercentageB + "% Code Written"
+            //     role1Metric = currentParticipantTalkTime + "% Participation in Conversation"
+            //     role2Metric = codePercentageB + "% Code Written"
 
-                fulfilledRoles = this.properlyFulfilledRoles(codePercentageB, currentParticipantTalkTime)
-            }
+            //     fulfilledRoles = this.properlyFulfilledRoles(codePercentageB, currentParticipantTalkTime)
+            // }
 
-            this.interventionSpecificMessages.push({
-                role: "system",
-                content: `${participants[0].name} has the ${role1} and therefore ${role1Goal}. ${participants[1].name} has the ${role2} role and therefore ${role2Goal}
-                          Evaluate ${participants[0].name} and ${participants[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
-                          The students should NOT have a balanced workload.`,
-              });
+            // this.interventionSpecificMessages.push({
+            //     role: "system",
+            //     content: `${participants[0].name} has the ${role1} and therefore ${role1Goal}. ${participants[1].name} has the ${role2} role and therefore ${role2Goal}
+            //               Evaluate ${participants[0].name} and ${participants[1].name} on how well they are fulfilling their respective roles. If they are not fulfilling their roles properly, explain how they can do better to fulfill the specific roles that they have been assigned.
+            //               The students should NOT have a balanced workload.`,
+            //   });
 
-            //remove switching roles / hardcode
-            this.interventionSpecificMessages.push({
-                role: "system",
-                content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}
-                          \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}`,
-              });
-            // await this.gpt();
+            // //remove switching roles / hardcode
+            // this.interventionSpecificMessages.push({
+            //     role: "system",
+            //     content: `[METRIC] ${role1} ${participants[0].name}: ${role1Metric}
+            //               \n[METRIC] ${role2} ${participants[1].name}: ${role2Metric}`,
+            //   });
+            // // await this.gpt();
 
-            await this.gptLimitedContext();
-            this.interventionSpecificMessages.pop();
-            this.interventionSpecificMessages.pop();
+            // await this.gptLimitedContext();
+            // this.interventionSpecificMessages.pop();
+            // this.interventionSpecificMessages.pop();
 
             // if (numSwitches < 1 && fulfilledRoles) {
-            if (fulfilledRoles)
-                await this.sendTypingStatus(true)
-                await sleep(1000)
-                await this.sendTypingStatus(false)
-                await this.send([
-                    {type: "text", value: "Great work. You should now switch roles using the switch roles button at the top of your screen." } ])
-            }
+            // if (fulfilledRoles) {
+            //     await this.sendTypingStatus(true)
+            //     await sleep(1000)
+            //     await this.sendTypingStatus(false)
+            //     await this.send([
+            //         {type: "text", value: "Great work. You should now switch roles using the switch roles button at the top of your screen." } ])
+            // }
             // this.numRoleSwitches = databaseNumSwitches
+        }
     }
 
     async talkTimeIntervention(participants: ParticipantInfo[]){
@@ -261,34 +327,52 @@ export default class Bruno {
             return
         }
         var talkPercentages = await this.getTimeContribution()
+
+        if (talkPercentages[0] > 70) {
+            await this.send([
+                {
+                    type: "text",
+                    value: `${participants[1].name} doesn't seem to be contributing as much to the conversation. Pair programming is more effective for both students if there is balanced conversation!`
+                }
+            ])
+        } else if (talkPercentages[1] > 70) {
+            await this.send([
+                {
+                    type: "text",
+                    value: `${participants[0].name} doesn't seem to be contributing as much to the conversation. Pair programming is more effective for both students if there is balanced conversation!`
+                }
+            ])
+        } else {
+            // TODO: Possibly send a positive confirmation message?
+        }
       
-        this.interventionSpecificMessages.push({
-            role: "system",
-            content:
-              "If you determine one student is contributing relatively less, you should guide the students and provide specific, constructive feedback to share a more even workload. For instance, if the software provides you the following metrics: \n \
-              [METRIC] Student A: 20% Conversation \n \
-              [METRIC] Student B: 80% Conversation \n \
-              \
-              You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags. A conversation contribution between 40-60% is considered an even split between the students.",
-          });
-          this.interventionSpecificMessages.push({
-            role: "system",
-            content: participants.map(p => `[METRIC] ${p.name}: ${talkPercentages[p.name]}% Contribution to Conversation`).join("\n")
-          });
-          // await this.gpt();
-          await this.gptLimitedContext();
-          this.interventionSpecificMessages.pop();
-          this.interventionSpecificMessages.pop();
+        // this.interventionSpecificMessages.push({
+        //     role: "system",
+        //     content:
+        //       "If you determine one student is contributing relatively less, you should guide the students and provide specific, constructive feedback to share a more even workload. For instance, if the software provides you the following metrics: \n \
+        //       [METRIC] Student A: 20% Conversation \n \
+        //       [METRIC] Student B: 80% Conversation \n \
+        //       \
+        //       You should encourage Student A to participate more in the conversation. Note that the above metrics are only an example and should not be used. The Code in Place software will provide you similar tags. A conversation contribution between 40-60% is considered an even split between the students.",
+        //   });
+        //   this.interventionSpecificMessages.push({
+        //     role: "system",
+        //     content: participants.map(p => `[METRIC] ${p.name}: ${talkPercentages[p.name]}% Contribution to Conversation`).join("\n")
+        //   });
+        //   // await this.gpt();
+        //   await this.gptLimitedContext();
+        //   this.interventionSpecificMessages.pop();
+        //   this.interventionSpecificMessages.pop();
     }
 
     async getTimeContribution(duration=600) {
-        let timePerPerson: Record<string, number> = {}
         let totalContributions: Record<string, number> = {}
         let totalTime = 0
 
         const transcript = await this.fetchTranscript().catch(err => [])
+        console.log("transcript", transcript)
         if (transcript.length === 0) {
-            return timePerPerson
+            return [0, 0]
         }
         const last = transcript.at(-1)!
         transcript.forEach(segment => {
@@ -298,25 +382,68 @@ export default class Bruno {
             }
         })
 
-        totalContributions = Object.fromEntries(Object.entries(timePerPerson).map(entry => [entry[0], Math.round(entry[1] / totalTime * 100)]))
-        return totalContributions
+        console.log("totalContributions",totalContributions)
+        console.log("totalTime",totalTime)
+
+        if (totalTime > 0) {
+            return [Math.round((totalContributions[this.participantNames[0]] / totalTime) * 100), Math.round((totalContributions[this.participantNames[1]] / totalTime) * 100)]
+        }
+        return [0, 0]
+
+
+        // totalContributions = Object.fromEntries(Object.entries(timePerPerson).map(entry => [entry[0], Math.round(entry[1] / totalTime * 100)]))
+        // return totalContributions
     }
 
     async getCodeContribution(specificCode?: string): Promise<[number, number]> {
+        /* Returns [number, number] that represents the percentage contribution of participant 0 and 1, respectively.
+           Only the code in the last 10 minutes is contributes to the percentages. */
+        const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000); // Get the timestamp for 10 minutes ago
+        
         if (specificCode != null) {
             var code = specificCode.replace(/[?\n]/g, "")
-        }
-        else {
+        } else {
             const codeHistory = await getCodeHistoryOfRoom(this.roomId)
-            if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > 0) {
-                var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?\n]/g, "")
-            }
-            else {
-                return [0,0]
+            
+            // Filter snapshots from the last 10 minutes
+            const recentSnapshots = codeHistory.filter(snapshot => new Date(snapshot.timestamp) >= tenMinutesAgo)
+            
+            if (recentSnapshots.length > 0) {
+                // Concatenate all author_map strings from recent snapshots
+                let concatenatedAuthorMap = recentSnapshots.map(snapshot => snapshot.author_map).join('').replace(/[?\n]/g, "");
+                
+                if (concatenatedAuthorMap.length > 0) {
+                    var code = concatenatedAuthorMap;
+                } else {
+                    return [0, 0];
+                }
+            } else {
+                return [0, 0]; // No recent snapshots
             }
         }
-        return [((code.match(/0/g) || "").length / code.length * 100), ((code.match(/1/g) || "").length / code.length * 100)]
+    
+        // Calculate the contribution percentages
+        return [
+            ((code.match(/0/g) || "").length / code.length * 100), 
+            ((code.match(/1/g) || "").length / code.length * 100)
+        ];
     }
+
+    // async getCodeContribution(specificCode?: string): Promise<[number, number]> {
+    //     if (specificCode != null) {
+    //         var code = specificCode.replace(/[?\n]/g, "")
+    //     }
+    //     else {
+    //         const codeHistory = await getCodeHistoryOfRoom(this.roomId)
+    //         if (codeHistory.length > 0 && codeHistory[codeHistory.length - 1].author_map.length > 0) {
+    //             var code = codeHistory[codeHistory.length - 1].author_map.replace(/[?\n]/g, "")
+    //         }
+    //         else {
+    //             return [0,0]
+    //         }
+    //     }
+    //     return [((code.match(/0/g) || "").length / code.length * 100), ((code.match(/1/g) || "").length / code.length * 100)]
+    // }
     // Runs every 5 minutes
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition <= 2) {
@@ -328,6 +455,7 @@ export default class Bruno {
                 }
             ])
         }
+
         if (this.condition === 0) {
             await this.talkTimeIntervention(participants)
         } else if (this.condition === 1) { 
@@ -566,7 +694,8 @@ export default class Bruno {
                     const [chatHistory] = await makeQuery(conn, "SELECT chat_history FROM Rooms WHERE id = ?", [this.roomId])
                     this.currentChatHistory = chatHistory[0].chat_history
                     if (this.state.stage === 1) {
-                        this.onUserMakesChoice(readyMessageId, 0, 0, "")
+                        // TODO: Add this back maybe?
+                        // this.onUserMakesChoice(readyMessageId, 0, 0, "")
                     }
                 }, 30000)
             }
@@ -664,14 +793,21 @@ There are two roles in pair programming:
             [this.participantData[1].email]: 2
         } })
 
-        let conn = await getConnection()
-        const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        // let conn = await getConnection()
+        // const [questions] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
+        // await this.send([
+        //     {type: "text", value: "Ok, let's pick a problem!"},
+        //     {type: "choices", value: questions.map((q:any) => q.title)}
+        // ])
+        // // this.introductionFlag = true
+        // conn.release()
+
         await this.send([
-            {type: "text", value: "Ok, let's pick a problem!"},
-            {type: "choices", value: questions.map((q:any) => q.title)}
+            {
+                type: 'text',
+                value: 'Click **Select Coding Problem** on the right to get started!'
+            }
         ])
-        // this.introductionFlag = true
-        conn.release()
 
         await this.saveState()
     }
@@ -741,6 +877,21 @@ There are two roles in pair programming:
         }    
     }
 
+    async onQuestionPick() {
+        console.log(this.state.stage, this.periodicFunctionInstance)
+        if (this.state.stage != 3) {
+            await this.sendTypingStatus(true)
+            await sleep(1000)
+            await this.sendTypingStatus(false)
+            await this.send([{type: "text", value: "Press the Run Code button in the top right corner to execute your program." } ])
+
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
+            this.state.stage = 3
+            await this.saveState()
+            console.log('HERE', this.state.stage, this.periodicFunctionInstance)
+        }
+    }
+
     async onQuestionPassed(questionId: string, questionTitle: string, testResults: any[]) {
         console.log('passed', questionId, questionTitle, testResults)
         if (!this.state.solvedQuestionIds.includes(questionId)) {
@@ -759,7 +910,7 @@ There are two roles in pair programming:
             await sleep(3000)
             await this.send([{
                 type: "text",
-                value: "If you are interested in working on more problems, you can select a different problem by clicking the **Switch Coding Problem** button."
+                value: "If you are interested in working on more problems, you can select a different problem by clicking the **Select Coding Problem** button."
             }])
         } else {
             await this.send([{
@@ -784,22 +935,39 @@ There are two roles in pair programming:
     }
 
     // Failable. Need to be catched.
-    async fetchTranscript() {
+    async fetchTranscript(): Promise<{
+        timestamp: number
+        duration: number
+        speech: string
+        name: string
+    }[]> {
         if (!this.recallBotId) { return [] } // If bot not yet entered, there's no transcript to return
+        const rawTranscript: {
+            timestamp: number
+            duration: number
+            speech: string
+            name: string
+        }[] = []
+        // const rawTranscript = (await recallInstance.get(`/bot/${this.recallBotId}/transcript`)).data as Record<string, any>[]
+        await recallInstance.get(`/bot/${this.recallBotId}/transcript`)
+            .then(response => {
+                response.data.map((entry: any) => {
+                    if (entry.speaker.endsWith(" 1")) {
+                        entry.speaker = entry.speaker.slice(0, -2)
+                    }
 
-        const rawTranscript = (await recallInstance.get(`/bot/${this.recallBotId}/transcript`)).data as Record<string, any>[]
-
-        return rawTranscript.map(entry => {
-            if (entry.speaker.endsWith(" 1")) {
-                entry.speaker = entry.speaker.slice(0, -2)
-            }
-            return {
-                timestamp: entry.end_timestamp as number,
-                duration: entry.end_timestamp - entry.start_timestamp as number,
-                speech: entry.text as string,
-                name: entry.speaker as string
-            }
-        })
+                    // Improve code quality
+                    entry.words.map((wordObj: any) => {
+                        rawTranscript.push({
+                            timestamp: wordObj.start_timestamp as number,
+                            duration: wordObj.end_timestamp - wordObj.start_timestamp as number,
+                            speech: wordObj.text as string,
+                            name: entry.speaker as string
+                        })
+                    })
+                })
+            })
+        return rawTranscript
     }
 
     async onBotEnteredZoom(botId: string) {
