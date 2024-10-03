@@ -33,7 +33,23 @@ app.get("/questions", async (req, res) => {
 
     try {
         const [testcases] = await makeQuery(conn, "SELECT question_id, title FROM TestCases")
-        res.json(testcases)
+        
+        const returnTestcases: any[] = []
+        // TEMP FIX FOR ORDERING:
+        const questions: any = {}
+        testcases.forEach((testcase: any) => {
+            questions[testcase.question_id] = testcase;
+        })
+        const order = ['multiply', 'dog_years', 'n_sided_dice', 'mad_libs', 'joke_bot', 'liftoff', 'khansole_academy', 'double_it', 'game_of_nimm', 'draw_flag', 'draw_ring', 'box_row', 'pyramid', 'quilt', 'compute_average', 'memory_game', 'quizzlet', 'baby_vocab']
+        order.forEach((question_id: any) => {
+            returnTestcases.push(questions[question_id])
+            delete questions[question_id]
+        })
+        if (Object.keys(questions).length > 0) {
+            console.log("A QUESTION IS NOT BEING SHOWN BC OF BAD ORDERING METHOD")
+        }
+        //
+        res.json(returnTestcases)
     } catch (error) {
         console.error(error)
         res.sendStatus(500)
