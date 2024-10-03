@@ -390,44 +390,44 @@ roomRouter.post("/:room_id/code", async (req, res) => {
     }
 })
 
-/*
-roomRouter.post("/:room_id/run", async (req, res) => {
-    const conn = await getConnection()
-    try {
-        const [room] = await makeQuery(conn, "SELECT code, question_id FROM Rooms WHERE id = ?", [req.params.room_id])
-        if (room.length === 0) {
-            return res.status(404).send("Did not find the room id")
-        }
 
-        const [testcases] = await makeQuery(conn, "SELECT title, stdin, stdout FROM TestCases WHERE question_id = ?", [room[0].question_id])
+// roomRouter.post("/:room_id/run", async (req, res) => {
+//     const conn = await getConnection()
+//     try {
+//         const [room] = await makeQuery(conn, "SELECT code, question_id FROM Rooms WHERE id = ?", [req.params.room_id])
+//         if (room.length === 0) {
+//             return res.status(404).send("Did not find the room id")
+//         }
 
-        if (testcases.length === 0) {
-            return res.status(404).send("Question id not set or did not find test cases for question")
-        }
+//         const [testcases] = await makeQuery(conn, "SELECT title, stdin, stdout FROM TestCases WHERE question_id = ?", [room[0].question_id])
 
-        const cases = testcases.map(async (testcase: any) => {
-            const response = await pistonInstance.post("/execute", {
-                language: "python",
-                version: "3.12.0",
-                stdin: testcase.stdin,
-                files: [
-                    { name: "main.py", content: room[0].code }
-                ]
-            })
-            return {title: testcase.title, stdin: testcase.stdin, expected: testcase.stdout, observed: response.data.run.stdout, is_correct: response.data.run.stdout === testcase.stdout};
-        })
+//         if (testcases.length === 0) {
+//             return res.status(404).send("Question id not set or did not find test cases for question")
+//         }
 
-        const results = await Promise.all(cases)
+//         const cases = testcases.map(async (testcase: any) => {
+//             const response = await pistonInstance.post("/execute", {
+//                 language: "python",
+//                 version: "3.12.0",
+//                 stdin: testcase.stdin,
+//                 files: [
+//                     { name: "main.py", content: room[0].code }
+//                 ]
+//             })
+//             return {title: testcase.title, stdin: testcase.stdin, expected: testcase.stdout, observed: response.data.run.stdout, is_correct: response.data.run.stdout === testcase.stdout};
+//         })
+
+//         const results = await Promise.all(cases)
         
-        res.status(200).json({ cases: results })
-    } catch {
-        res.sendStatus(500);
-    } finally {
-        conn.release()
-    }
+//         res.status(200).json({ cases: results })
+//     } catch {
+//         res.sendStatus(500);
+//     } finally {
+//         conn.release()
+//     }
    
-})
-*/
+// })
+
 
 roomRouter.post("/:room_id/test_results", async (req, res) => {
 

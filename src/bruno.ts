@@ -580,7 +580,7 @@ export default class Bruno {
                     const cleaned = completion.choices[0].message.content//.replace(/.+\{/sg, "{")
                     console.log('raw gpt message', cleaned)
                     const json = JSON.parse(cleaned)
-                    if (json.score === 10) {
+                    if (json.score >= 9) {
                         // await this.send([{ type: "text", value: json.feedback }]);
                         this.onQuestionPassed(questionId, testCase[0].title, [])
                     } else {
@@ -660,21 +660,21 @@ export default class Bruno {
                 await this.send([
                     {type: "text", value: "Hi, I'm Bruno, your pair programming facillitator. I'm here to help you get the most out of this session."}
                 ])
-                await sleep(3000)
+                await sleep(5000)
                 
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
                     {type: "text", value: "I've created a Zoom meeting for the two of you to communicate with each other as you work together. Please join the meeting now by clicking the “Join Video Call” button in the top left corner." } ])
-                await sleep(3000)
+                await sleep(5000)
 
                 await this.sendTypingStatus(true)
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
                     {type: "text", value: "When both of you are in the Zoom meeting, a PearProgram bot will be there to provide me information about your progress. It won't intervene your conversation in any way. You can safely ignore it." } ])
-                await sleep(3000) 
+                await sleep(15000) 
 
                 const readyMessageId = await this.send([
                     {type: "text", value: "Now, if you haven't already, take a moment to introduce yourself to your partner. Click the “Ready” button below to let me know once you are done."},
@@ -694,8 +694,7 @@ export default class Bruno {
                     const [chatHistory] = await makeQuery(conn, "SELECT chat_history FROM Rooms WHERE id = ?", [this.roomId])
                     this.currentChatHistory = chatHistory[0].chat_history
                     if (this.state.stage === 1) {
-                        // TODO: Add this back maybe?
-                        // this.onUserMakesChoice(readyMessageId, 0, 0, "")
+                        this.onUserMakesChoice(readyMessageId, 0, 0, "")
                     }
                 }, 30000)
             }
@@ -764,7 +763,7 @@ export default class Bruno {
         await this.send([
             {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
                                 \n\nResearch has shown that students who pair program have improved learning outcomes, gain confidence and enjoy programming more!" } ])
-        await sleep(6000)
+        await sleep(15000)
 
         await this.sendTypingStatus(true)
         await sleep(2000)
@@ -782,7 +781,7 @@ There are two roles in pair programming:
 **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.
 
 **Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.` } ])
-        await sleep(5000)
+        await sleep(30000)
 
         await this.send([
             {type: "text", value: `${this.participantNames[0]} has been assigned the "Driver" role. \n\n${this.participantNames[1]} has been assigned the "Navigator" role. You can switch these roles at any time using the 'Switch Roles' button at the top of your screen.`}
