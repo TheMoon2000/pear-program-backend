@@ -448,12 +448,7 @@ export default class Bruno {
     async periodicFunction(participants: ParticipantInfo[]) {
         if (this.condition <= 2) {
             const conditionName = ["Talk time", "Turn taking", "Intersubjectivity", "Control"][this.condition]
-            await this.send([
-                {
-                    type: "text",
-                    value: `(Debug message) Begin intervention for ${conditionName}`
-                }
-            ])
+            console.log(`Begin intervention for ${conditionName}`)
         }
 
         if (this.condition === 0) {
@@ -647,12 +642,7 @@ export default class Bruno {
                 });
 
                 const conditionName = ["Talk time", "Turn taking", "Intersubjectivity", "Control"][this.condition]
-                await this.send([
-                    {
-                        type: "text",
-                        value: `(Debug message) Room condition: ${conditionName}`
-                    }
-                ])
+                console.log(`Room condition: ${conditionName}`)
 
                 await this.sendTypingStatus(true)
                 await sleep(1000)
@@ -878,6 +868,7 @@ There are two roles in pair programming:
 
     async onQuestionPick() {
         console.log(this.state.stage, this.periodicFunctionInstance)
+
         if (this.state.stage != 3) {
             await this.sendTypingStatus(true)
             await sleep(1000)
@@ -887,7 +878,10 @@ There are two roles in pair programming:
             this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
             this.state.stage = 3
             await this.saveState()
-            console.log('HERE', this.state.stage, this.periodicFunctionInstance)
+        }
+
+        if (this.periodicFunctionInstance == undefined) {
+            this.periodicFunctionInstance = setInterval(()=>this.periodicFunction(this.participantData), this.periodLength * 60 * 1000)
         }
     }
 
