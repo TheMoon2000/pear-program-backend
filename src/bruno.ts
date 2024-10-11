@@ -730,11 +730,12 @@ export default class Bruno {
         this.currentChatHistory = newChatHistory
 
         if (eventType === "send_text") {
-            const codeHistory = await getCodeHistoryOfRoom(this.roomId)
-            console.log("Latest state of code:", codeHistory[codeHistory.length - 1])
+            // TODO: add back in what should be done if user sends a message.
+            // const codeHistory = await getCodeHistoryOfRoom(this.roomId)
+            // console.log("Latest state of code:", codeHistory[codeHistory.length - 1])
 
 
-            await this.composeAiGraderMessages()
+            // await this.composeAiGraderMessages()
 
             // WHEN USER SENDS MESSAGE IN CHAT, SEND QUERY TO GPT AND OUTPUT RESPONSE
             // this.brunoMessages.push({
