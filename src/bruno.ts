@@ -198,10 +198,10 @@ export default class Bruno {
         // var numSwitches = databaseNumSwitches - this.numRoleSwitches   
 
         const conn = await getConnection()
-        const [info1] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ? AND is_online = 1", [participants[0].email])
+        const [info1] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ?", [participants[0].email])
         let participant0Role: 0 | 1 | 2 = info1[0].role ?? 0
 
-        const [info2] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ? AND is_online = 1", [participants[1].email])
+        const [info2] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ?", [participants[1].email])
         let participant1Role: 0 | 1 | 2 = info2[0].role ?? 0
 
         if (participant0Role != 0 && participant1Role != 0) {
