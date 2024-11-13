@@ -13,6 +13,7 @@ interface AdmitTask {
     name: string
     email: string
     socket: WebSocket
+    newlineCharacter: string
 }
 
 export const admitQueue = fastq.promise(admitIntoRoomWorker, 1)
@@ -23,11 +24,12 @@ queueServer.on("connection", (ws, request) => {
     const query = url.parse(request.url ?? '', true).query;
     const name = query.name as string
     const email = query.email as string
+    const newlineCharacter = query.newlineCharacter as string
 
     if (admitQueue.getQueue().some(task => task.email === email)) {
         ws.close(4000, "This email is already in queue.")
     } else {
-        admitQueue.push({ name, email, socket: ws })
+        admitQueue.push({ name, email, socket: ws, newlineCharacter })
         
         ws.send(JSON.stringify({ order: admitQueue.length() + 1 }))
     }
@@ -47,6 +49,7 @@ async function admitIntoRoomWorker(task: AdmitTask) {
         const ws = task.socket
         const userEmail = task.email
         const username = task.name
+        const newlineCharacter = task.newlineCharacter
 
         const zoomAccessToken = await getZoomAccessToken()
 
@@ -55,16 +58,16 @@ async function admitIntoRoomWorker(task: AdmitTask) {
         try {
             /* In either case, register the user first */
             await makeQuery(conn, "INSERT INTO Users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE name = ?, last_participated = NOW(3)", [userEmail, username, username])
-
-            let [halfVacantRooms] = await makeQuery(conn, "SELECT Rooms.id, Rooms.zoom_meeting_id, Rooms.meeting_host, Rooms.meeting_expired, CAST(SUM(Participants.is_online >= 1) AS UNSIGNED) AS online_count, JSON_ARRAYAGG(Participants.user_email) as email_list FROM Rooms INNER JOIN Participants ON Rooms.id = Participants.room_id WHERE Rooms.meeting_expired = 0 GROUP BY 1,2,3,4 ORDER BY creation_date")
+        
+            let [halfVacantRooms] = await makeQuery(conn, "SELECT Rooms.id, Rooms.zoom_meeting_id, Rooms.meeting_host, Rooms.meeting_expired, Rooms.newline_character, CAST(SUM(Participants.is_online >= 1) AS UNSIGNED) AS online_count, JSON_ARRAYAGG(Participants.user_email) as email_list FROM Rooms INNER JOIN Participants ON Rooms.id = Participants.room_id WHERE Rooms.meeting_expired = 0 GROUP BY 1,2,3,4 ORDER BY creation_date");
 
             halfVacantRooms = halfVacantRooms.filter((room: any) => room.email_list.length < 2)
-            const activeRooms: Array<any> = halfVacantRooms.filter((room: any) => room.online_count > 0)
+            const activeRooms: Array<any> = halfVacantRooms.filter((room: any) => room.online_count > 0 && room.newline_character === newlineCharacter)
 
             console.log('active rooms', activeRooms)
 
             // Case 1: user has been waiting by themselves alone in a room. Get them there
-            let occupiedRoom = (halfVacantRooms as Array<any>).find(room => room.email_list.length === 1 && room.email_list[0] === userEmail)
+            let occupiedRoom = (halfVacantRooms as Array<any>).find(room => room.email_list.length === 1 && room.email_list[0] === userEmail && room.newline_character === newlineCharacter)
             if (occupiedRoom) {
                 console.log(`Directing ${userEmail} to the room they opened themselves (${occupiedRoom.id})`)
                 ws.send(JSON.stringify({
@@ -228,7 +231,7 @@ async function admitIntoRoomWorker(task: AdmitTask) {
 
                 const initialCode = `print("Hello world!")`
                 const initialAuthorMap = initialCode.replace(/[^\n]/g, "?")
-                await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, zoom_meeting_id, jupyter_server_token, `condition`, meeting_host) VALUES (?, ?, ?, ?, ?, ?, ?)", [sessionId, initialCode, initialAuthorMap, meetingId, userToken, condition, chosenHost])
+                await makeQuery(conn, "INSERT INTO Rooms (id, code, author_map, zoom_meeting_id, jupyter_server_token, `condition`, meeting_host, newline_character) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [sessionId, initialCode, initialAuthorMap, meetingId, userToken, condition, chosenHost, newlineCharacter]);
 
                 // Insert participant into zoom meeting
                 const addRegistrantResponse = await zoomInstance.post(`/meetings/${meetingId}/registrants`, {
