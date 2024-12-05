@@ -196,7 +196,9 @@ export default class Bruno {
     async turnTakingIntervention(participants: ParticipantInfo[]){
         // var databaseNumSwitches = await this.getNumSwitches() 
         // var numSwitches = databaseNumSwitches - this.numRoleSwitches   
-
+        if (!(participants[0] && participants[1])) {
+            return
+        }
         const conn = await getConnection()
         const [info1] = await makeQuery(conn, "SELECT role FROM Participants WHERE user_email = ?", [participants[0].email])
         let participant0Role: 0 | 1 | 2 = info1[0].role ?? 0
