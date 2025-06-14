@@ -650,7 +650,7 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "Hi, I'm Bruno, your pair programming facillitator. I'm here to help you get the most out of this session."}
+                    {type: "text", value: "Welcome to Pear Program! I'm Bruno, your pair programming facilitator. I'm here to help you get the most out of this session."}
                 ])
                 await sleep(5000)
                 
@@ -665,11 +665,11 @@ export default class Bruno {
                 await sleep(1000)
                 await this.sendTypingStatus(false)
                 await this.send([
-                    {type: "text", value: "When both of you are in the Zoom meeting, a PearProgram bot will be there to provide me information about your progress. It won't intervene your conversation in any way. You can safely ignore it." } ])
+                    {type: "text", value: "The PearProgram bot will join the Zoom meeting for research purposes. If you aren’t comfortable with the session being recorded, now is the time to opt out." } ])
                 await sleep(15000) 
 
                 const readyMessageId = await this.send([
-                    {type: "text", value: "Now, if you haven't already, take a moment to introduce yourself to your partner. Click the “Ready” button below to let me know once you are done."},
+                    {type: "text", value: "Take a moment to introduce yourself to your partner. You might want to ask about where they are from, why they joined Code in Place, or their programming experience. Click the “Ready” button below to let me know once you are done."},
                     {type: "choices", value: ["Ready"]}
                 ])
 
@@ -754,7 +754,7 @@ export default class Bruno {
         await sleep(2000)
         await this.sendTypingStatus(false)
         await this.send([
-            {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to program and work together to build it. \
+            {type: "text", value: "The goal of pair programming is for both partners to understand every line of code. You should create a plan for how to work together to solve each problem. \
                                 \n\nResearch has shown that students who pair program have improved learning outcomes, gain confidence and enjoy programming more!" } ])
         await sleep(15000)
 
@@ -765,15 +765,20 @@ export default class Bruno {
             {type: "text", 
             value: `Heres how to pair program:
 
-There are two roles in pair programming:
+New to pair programming? There are two roles: 
 - **Driver**: This person writes the code. They should think out loud and help the navigator understand the code.
-- **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.
-
-**Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.
+- **Navigator**: This person reviews each line of code as it is typed, considers the big picture, and provides directions and suggestions.` } ])
+        await sleep(5000)
+        await this.send([
+            {
+                type: "text",
+                value: `**Switch Roles Regularly**: To keep the session dynamic and engage both participants, switch roles frequently. This could be after a set amount of time (like every 10 minutes) or at the completion of a specific task.
 
 **Communicate Effectively**: Open and continuous communication is crucial. Discuss what you are doing, why you are doing it, and what the expected outcome is. Ask questions and offer explanations freely.
 
-**Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.` } ])
+**Respect and Patience**: Pair programming can be intense, and it's essential to be patient and respectful towards your partner.`
+            }
+        ])
         await sleep(30000)
 
         await this.send([
@@ -898,11 +903,6 @@ There are two roles in pair programming:
                 value: `Congrats for solving ${questionTitle}! I hope that you enjoyed this coding session.`
             }])
             await this.saveState()
-            await sleep(3000)
-            await this.send([{
-                type: "text",
-                value: "Please take a few minutes to share your feedback regarding your coding experience at [this link](https://forms.gle/3a7kP3YgC8zjZuaQ8)."
-            }])
             await sleep(3000)
             await this.send([{
                 type: "text",

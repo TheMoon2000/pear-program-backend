@@ -14,7 +14,9 @@ export const ACTIVE_BOTS = new Map<string, string>()
 export const ZOOM_HOSTS: string[] = [
     "pearprogram-zoom1@proton.me",
     "pearprogram-zoom2@proton.me",
-    "pearprogram-zoom3@proton.me"
+    "pearprogram-zoom3@proton.me",
+    "pearprogram-zoom4@proton.me",
+    "pearprogram-zoom5@proton.me"
 ]
 
 // Values correspond to the order of `ZOOM_HOSTS`.

@@ -18,11 +18,27 @@ const roomTimeouts = new Map<string, NodeJS.Timeout>();
 export const roomRouter = Router()
 
 export async function getZoomAccessToken() {
-    return (await axios.post("https://zoom.us/oauth/token", `grant_type=refresh_token&refresh_token=${encodeURIComponent(process.env.ZOOM_REFRESH_TOKEN as string)}`,
-    { headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: process.env.ZOOM_AUTH
-    } })).data.access_token as string
+    try {
+        const response = await axios.post(
+            "https://zoom.us/oauth/token",
+            `grant_type=refresh_token&refresh_token=${encodeURIComponent(process.env.ZOOM_REFRESH_TOKEN as string)}`,
+            { 
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    Authorization: process.env.ZOOM_AUTH
+                } 
+            }
+        );
+        
+        if (!response.data?.access_token) {
+            throw new Error("No access token in response");
+        }
+        
+        return response.data.access_token as string;
+    } catch (error) {
+        console.error("Failed to get Zoom token:", error);
+        throw error; // Re-throw to handle in calling code
+    }
 }
 
 export async function execAsync(command: string) {
@@ -484,6 +500,13 @@ roomRouter.patch("/:room_id", async (req, res) => {
         }
 
         const author_map = testCases[0].starter_code.replace(/[^\n]/g, "?")
+
+        const [retrieveNewlineRoom] = await makeQuery(conn, "SELECT newline_character FROM Rooms WHERE id = ?", [req.params.room_id]);
+        if (retrieveNewlineRoom.length == 0) {
+            return res.status(404).send("Room id not found")
+        }
+
+        const newlineCharacter = retrieveNewlineRoom[0].newline_character;
         
         const [room] = await makeQuery(conn, "UPDATE Rooms SET code = ?, author_map = ?, question_id = ? WHERE id = ?", 
                         [testCases[0].starter_code, author_map, req.body.question_id, req.params.room_id])
@@ -510,20 +533,19 @@ roomRouter.patch("/:room_id", async (req, res) => {
                 const rawMessage = JSON.parse(data.toString())
                 if (rawMessage.History && rawMessage.History.start === 0) {
                     const nextOperation = rawMessage.History.operations.length
+
                     roomWs.send(JSON.stringify({
                         "CursorData": { "cursors": [currentText.length], "selections": [[0, currentText.length]] }
                     }), () => {
                         roomWs.send(JSON.stringify({
                             "Edit": { revision: nextOperation, "operation": [-currentText.length] }
                         }), () => {
-                            console.log(JSON.stringify({
-                                Edit: { revision: nextOperation + 1, operation: [testCases[0].starter_code] }
-                            }))
                             roomWs.send(JSON.stringify({
-                                Edit: { revision: nextOperation + 1, operation: [testCases[0].starter_code] }
+                                Edit: { revision: nextOperation + 1, operation: [testCases[0].starter_code.replace(/\n/g, newlineCharacter)]}
                             }), r)
                         })
                     })
+
                 }
             })
 
@@ -552,7 +574,7 @@ roomRouter.patch("/:room_id", async (req, res) => {
                                 console.log('delete failed', err)
                             }
                             authorWs.send(JSON.stringify({
-                                Edit: { revision: nextOperation + 1, operation: [initialAuthorMap] }
+                                Edit: { revision: nextOperation + 1, operation: [initialAuthorMap.replace(/\n/g, newlineCharacter)] }
                             }), r)
                         })
                     })

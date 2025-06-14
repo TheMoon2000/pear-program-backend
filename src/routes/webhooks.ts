@@ -77,13 +77,27 @@ webhookRouter.all("/zoom", async (req, res) => {
 
             const accessToken = await getZoomAccessToken()
             const meetingId = req.body.payload.object.id as string
+            // 1/30/25 Added error handling for when the meeting does not exist (lines 84-92)
             const meetingInfo = await zoomInstance.get(`/meetings/${meetingId}`, {
                 headers: { Authorization: `Bearer ${accessToken}` }
             })
+            // let meetingInfo;
+            // try {
+            //     meetingInfo = await zoomInstance.get(`/meetings/${meetingId}`, { 
+            //         headers: { Authorization: `Bearer ${accessToken}` }
+            //     });
+            // } catch (error) { 
+            //     if (error instanceof Error) {
+            //         console.error(`Error fetching meeting ${meetingId}:`, error.message);
+            //     } else {
+            //         console.error(`Error fetching meeting ${meetingId}:`, error);
+            //     }
+            //     return res.status(404).send({ error: `Meeting ${meetingId} not found` });
+            // }
             const roomId = meetingInfo.data.agenda as string
             const hostIndex = ZOOM_HOSTS.indexOf(meetingInfo.data.host_email)
             if (hostIndex === -1) { return res.send() } // Ignore activity in all zoom accounts that are not included in ZOOM_HOSTS
-
+            
             if (req.body?.event === "meeting.participant_joined") {
                 const participantObject = req.body.payload.object.participant
                 
@@ -103,9 +117,18 @@ webhookRouter.all("/zoom", async (req, res) => {
                             email: participantObject.email,
                             roomId: roomId
                         })
+
+                        console.log(`Checking bot dispatch for meeting ${meetingId}`);
+                        console.log(`Current participant count:`, ACTIVE_PARTICIPANTS.get(meetingId)?.length);
+                        console.log(`Bot already present:`, ACTIVE_BOTS.has(meetingId));
     
                         // If the participant count reaches 2 and no bot is in the room right now, dispatch a new bot
                         if (ACTIVE_PARTICIPANTS.get(meetingId)!.length >= 2 && !ACTIVE_BOTS.has(meetingId)) {
+
+                            console.log(`Inviting Recall AI bot to Zoom meeting ${meetingId}`);
+                            console.log(`Sending request to Zoom API to add bot as registrant for meeting ${meetingId}`);
+
+
                             // Invite the bot to the zoom meeting as a registrant
                             const addRegistrantResponse = await zoomInstance.post(`https://api.zoom.us/v2/meetings/${meetingId}/registrants`, {
                                 first_name: "PearProgram",
@@ -114,6 +137,29 @@ webhookRouter.all("/zoom", async (req, res) => {
                             }, {
                                 headers: { Authorization: `Bearer ${accessToken}` }
                             })
+
+                            console.log("Zoom registrant response received:", addRegistrantResponse.data);
+                            console.log(`Zoom bot join URL:`, addRegistrantResponse.data.join_url);
+                        
+                            console.log(`Sending bot join request to Recall AI for meeting ${meetingId}`);
+                        
+                            // Log Recall AI request payload
+                            console.log("Recall AI bot request payload:", {
+                                transcription_options: {
+                                    provider: "meeting_captions"
+                                },
+                                meeting_url: addRegistrantResponse.data.join_url,
+                                real_time_transcription: {
+                                    destination_url: "https://pearprogram.co/api/webhooks/transcription"
+                                },
+                                bot_name: "PearProgram Bot",
+                                automatic_leave: {
+                                    everyone_left_timeout: EMPTY_MEETING_BOT_LEAVE_TIMEOUT
+                                },
+                                zoom: {
+                                    user_email: `bot-${meetingId}@pearprogram.co`
+                                }
+                            });
                             
                             // add bot
                             const createBotResponse = await recallInstance.post("/bot", {
@@ -132,6 +178,8 @@ webhookRouter.all("/zoom", async (req, res) => {
                                     user_email: `bot-${meetingId}@pearprogram.co`
                                 }
                             })
+                            
+                            console.log("Recall AI bot response received:", createBotResponse.data);
                             ACTIVE_BOTS.set(meetingId, createBotResponse.data.id)
                             console.log(`Injected bot ${createBotResponse.data.id} to zoom meeting ${meetingId}`)
                         }
@@ -145,7 +193,7 @@ webhookRouter.all("/zoom", async (req, res) => {
                     const roomId = meetingInfo.data.agenda as string
                     const bruno = socketMap.get(roomId)?.ai
                     if (bruno && ACTIVE_BOTS.has(meetingId)) {
-                        bruno.onBotEnteredZoom(ACTIVE_BOTS.get(meetingId)!)
+                        bruno?.onBotEnteredZoom(ACTIVE_BOTS.get(meetingId)!)
                     } else if (!bruno) {
                         console.warn(`WARNING: did not find Bruno instance for room ${roomId}!!`)
                     } else {
@@ -157,7 +205,9 @@ webhookRouter.all("/zoom", async (req, res) => {
                 const participantObject = req.body.payload.object.participant
                 const deleteIndex = ACTIVE_PARTICIPANTS.get(meetingId)?.findIndex(info => info.registrant_id === participantObject.registrant_id)
                 if (typeof deleteIndex === "number" && deleteIndex !== -1) {
-                    ACTIVE_PARTICIPANTS.get(meetingId)?.splice(deleteIndex, 1)
+                    // 01/31/25 default deleteIndex value if invalid meetingInfo
+                    //ACTIVE_PARTICIPANTS.get(meetingId)?.splice(deleteIndex, 1)
+                    ACTIVE_PARTICIPANTS.get(meetingId)?.splice(deleteIndex ?? -1, 1);
                     if (ACTIVE_PARTICIPANTS.get(meetingId)?.length === 0) {
                         ACTIVE_PARTICIPANTS.delete(meetingId)
                         
@@ -208,7 +258,7 @@ webhookRouter.all("/zoom", async (req, res) => {
                 } else if (participantObject.email.startsWith("bot")) {
                     const bruno = socketMap.get(roomId)?.ai
                     if (bruno && ACTIVE_BOTS.has(meetingId)) {
-                        bruno.onBotLeftZoom(ACTIVE_BOTS.get(meetingId)!)
+                        bruno?.onBotLeftZoom(ACTIVE_BOTS.get(meetingId)!)
                         ACTIVE_BOTS.delete(meetingId)
                     }
                 }

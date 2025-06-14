@@ -16,6 +16,10 @@ interface AdmitTask {
     newlineCharacter: string
 }
 
+const printStuff = (printed: string) => {
+    console.log(printed)
+}
+
 export const admitQueue = fastq.promise(admitIntoRoomWorker, 1)
 
 const queueServer = new WebSocketServer({ port: 4011, path: "/socket", clientTracking: false, maxPayload: 1048576 })
@@ -25,6 +29,8 @@ queueServer.on("connection", (ws, request) => {
     const name = query.name as string
     const email = query.email as string
     const newlineCharacter = query.newlineCharacter as string
+    printStuff("newline " + newlineCharacter)
+
 
     if (admitQueue.getQueue().some(task => task.email === email)) {
         ws.close(4000, "This email is already in queue.")
@@ -174,7 +180,7 @@ async function admitIntoRoomWorker(task: AdmitTask) {
                         socketMap.get(participants[0].roomId)?.ai.send([
                             {
                                 type: "text",
-                                value: `Hey ${participants[0].username}, seems like you are the only one in the Zoom meeting now. I just wanted to let you know that someone else is already waiting outside to start a new PearProgram session, and they can't start until you exit the Zoom meeting (due to Zoom quotas). Please be mindful of the time that you are spending inside Zoom. You can still write code in the PearProgram session after leaving Zoom.`
+                                value: `Hey ${participants[0].username}, sseems like you’re the only one in the Zoom room. There’s someone else waiting to use a room and they can’t enter until you exit. Please be mindful of staying in Zoom rooms you aren’t using.`
                             }
                         ])
                     }
